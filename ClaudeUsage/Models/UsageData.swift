@@ -8,22 +8,36 @@ private let logger = Logger(subsystem: Constants.App.bundleIdentifier, category:
 private enum DateFormatters {
     static let timeOnly: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US")
-        formatter.dateFormat = "HH:mm"
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
         return formatter
     }()
 
     static let dateTime: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US")
-        formatter.dateFormat = "MM/dd HH:mm"
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
         return formatter
     }()
 
     static let monthDay: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US")
-        formatter.dateFormat = "MMM d"
+        formatter.setLocalizedDateFormatFromTemplate("MMMd")
+        return formatter
+    }()
+
+    /// Abbreviated duration formatter in English (e.g., "2h 30m", "3d 5h")
+    static let remainingTime: DateComponentsFormatter = {
+        let formatter = DateComponentsFormatter()
+        formatter.unitsStyle = .abbreviated
+        formatter.allowedUnits = [.day, .hour, .minute]
+        formatter.maximumUnitCount = 2
+        formatter.zeroFormattingBehavior = .dropAll
+        formatter.calendar = {
+            var calendar = Calendar.current
+            calendar.locale = Locale(identifier: "en_US_POSIX")
+            return calendar
+        }()
         return formatter
     }()
 }
@@ -246,83 +260,95 @@ struct UsageItem: Identifiable {
         key != "five_hour"
     }
 
+    // MARK: - Reset Time Display Properties
+
+    private var resetTimeResult: ResetTimeFormatter.Result {
+        ResetTimeFormatter.parse(resetsAt)
+    }
+
     /// Reset time display for short intervals (5-hour style)
     /// e.g., "14:30 · in 2h 30m"
     var resetTimeDisplay: String? {
-        switch timeComponentsResult {
+        switch resetTimeResult {
         case .none: return nil
-        case .expired: return Self.updatingText
-        case .valid(let tc):
-            let timeStr = formatResetTime(tc.date)
-            let remaining = formatRemainingTime(hours: tc.hours, minutes: tc.minutes)
-            return "\(timeStr) · \(remaining)"
+        case .expired: return ResetTimeFormatter.updatingText
+        case .valid(let tc): return ResetTimeFormatter.shortDisplay(for: tc)
         }
     }
 
     /// Short reset time for menubar display (e.g., "14:30")
     var resetTimeShort: String? {
-        switch timeComponentsResult {
+        switch resetTimeResult {
         case .none: return nil
-        case .expired: return Self.updatingText
-        case .valid(let tc):
-            return DateFormatters.timeOnly.string(from: roundToNearestMinute(tc.date))
+        case .expired: return ResetTimeFormatter.updatingText
+        case .valid(let tc): return ResetTimeFormatter.timeOnly(for: tc)
         }
     }
 
-    /// Compact remaining time (e.g., "3d5h", "2h30m", "45m")
+    /// Compact remaining time in English (e.g., "2h 30m", "3d 5h", "Ready")
     var resetTimeRemaining: String? {
-        switch timeComponentsResult {
-        case .none: return nil
-        case .expired: return Self.updatingText
-        case .valid(let tc):
-            if tc.days > 0 {
-                return tc.hours > 0 ? "\(tc.days)d\(tc.hours)h" : "\(tc.days)d"
-            } else if tc.hours > 0 {
-                return tc.minutes > 0 ? "\(tc.hours)h\(tc.minutes)m" : "\(tc.hours)h"
-            } else {
-                return "\(max(1, tc.minutes))m"
-            }
+        switch resetTimeResult {
+        case .none: return ResetTimeFormatter.readyText
+        case .expired: return ResetTimeFormatter.updatingText
+        case .valid(let tc): return ResetTimeFormatter.compactRemaining(for: tc)
         }
     }
 
     /// Reset time display for longer intervals (7-day style)
     /// e.g., "Jan 5 · in 3d 5h" or "14:30 · in 2h 30m" (if today)
     var resetTimeDisplayLong: String? {
-        switch timeComponentsResult {
+        switch resetTimeResult {
         case .none: return nil
-        case .expired: return Self.updatingText
-        case .valid(let tc):
-            let rounded = roundToNearestMinute(tc.date)
-            if Calendar.current.isDateInToday(rounded) {
-                let timeStr = DateFormatters.timeOnly.string(from: rounded)
-                let remaining = formatRemainingTime(hours: tc.hours, minutes: tc.minutes)
-                return "\(timeStr) · \(remaining)"
-            } else {
-                let dateStr = DateFormatters.monthDay.string(from: rounded)
-                let remaining = tc.days > 0 ? "in \(tc.days)d \(tc.hours)h" : "in \(tc.hours)h"
-                return "\(dateStr) · \(remaining)"
-            }
+        case .expired: return ResetTimeFormatter.updatingText
+        case .valid(let tc): return ResetTimeFormatter.longDisplay(for: tc)
         }
     }
 
-    // MARK: - Private Helpers
+}
 
-    private static let updatingText = "Updating..."
+// MARK: - Reset Time Formatting
 
-    private struct TimeComponents {
+/// Handles all reset time formatting logic for UsageItem
+private enum ResetTimeFormatter {
+    static let updatingText = "Updating..."
+    static let readyText = "Ready"
+
+    struct TimeComponents {
         let date: Date
         let days: Int
         let hours: Int
         let minutes: Int
+
+        var totalSeconds: Int {
+            days * Constants.Time.secondsPerDay
+                + hours * Constants.Time.secondsPerHour
+                + minutes * Constants.Time.secondsPerMinute
+        }
+
+        /// Formatted remaining time (e.g., "2h 30m")
+        var remainingFormatted: String? {
+            let interval = TimeInterval(max(60, totalSeconds))
+            return DateFormatters.remainingTime.string(from: interval)
+        }
+
+        /// Formatted remaining time with "in" prefix (e.g., "in 2h 30m")
+        var remainingWithPrefix: String {
+            if let formatted = remainingFormatted {
+                return "in \(formatted)"
+            }
+            // Fallback (should not happen)
+            return hours > 0 ? "in \(hours)h \(minutes)m" : "in \(minutes)m"
+        }
     }
 
-    private enum TimeComponentsResult {
+    enum Result {
         case none
         case expired
         case valid(TimeComponents)
     }
 
-    private var timeComponentsResult: TimeComponentsResult {
+    /// Parse resetsAt date into TimeComponents
+    static func parse(_ resetsAt: Date?) -> Result {
         guard let resetsAt = resetsAt else { return .none }
         let interval = resetsAt.timeIntervalSince(Date())
         guard interval > 0 else { return .expired }
@@ -336,13 +362,15 @@ struct UsageItem: Identifiable {
         ))
     }
 
-    private func roundToNearestMinute(_ date: Date) -> Date {
+    /// Round date to nearest minute
+    static func roundToNearestMinute(_ date: Date) -> Date {
         let seconds = Calendar.current.component(.second, from: date)
         let adjustment = seconds >= 30 ? (60 - seconds) : -seconds
         return date.addingTimeInterval(TimeInterval(adjustment))
     }
 
-    private func formatResetTime(_ date: Date) -> String {
+    /// Format reset time with relative prefix (e.g., "14:30", "Tmr 14:30", "2/1 14:30")
+    static func formatResetTime(_ date: Date) -> String {
         let rounded = roundToNearestMinute(date)
         let calendar = Calendar.current
         if calendar.isDateInToday(rounded) {
@@ -354,12 +382,39 @@ struct UsageItem: Identifiable {
         }
     }
 
-    private func formatRemainingTime(hours: Int, minutes: Int) -> String {
-        if hours > 0 {
-            return "in \(hours)h \(minutes)m"
-        } else {
-            return "in \(minutes)m"
+    /// Short display: "14:30 · in 2h 30m"
+    static func shortDisplay(for tc: TimeComponents) -> String {
+        let timeStr = formatResetTime(tc.date)
+        return "\(timeStr) · \(tc.remainingWithPrefix)"
+    }
+
+    /// Long display: "Jan 5 · in 3d 5h" or "14:30 · in 2h 30m" (if today)
+    static func longDisplay(for tc: TimeComponents) -> String {
+        let rounded = roundToNearestMinute(tc.date)
+        guard let remaining = tc.remainingFormatted else {
+            // Fallback: just show the date/time without remaining
+            return Calendar.current.isDateInToday(rounded)
+                ? DateFormatters.timeOnly.string(from: rounded)
+                : DateFormatters.monthDay.string(from: rounded)
         }
+
+        if Calendar.current.isDateInToday(rounded) {
+            let timeStr = DateFormatters.timeOnly.string(from: rounded)
+            return "\(timeStr) · in \(remaining)"
+        } else {
+            let dateStr = DateFormatters.monthDay.string(from: rounded)
+            return "\(dateStr) · in \(remaining)"
+        }
+    }
+
+    /// Compact remaining only: "2h 30m"
+    static func compactRemaining(for tc: TimeComponents) -> String? {
+        tc.remainingFormatted
+    }
+
+    /// Time only: "14:30"
+    static func timeOnly(for tc: TimeComponents) -> String {
+        DateFormatters.timeOnly.string(from: roundToNearestMinute(tc.date))
     }
 }
 
