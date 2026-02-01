@@ -95,15 +95,23 @@ struct UsageCardCompactView: View {
                     .foregroundColor(.secondary)
                     .lineLimit(1)
 
-                // Percentage
-                HStack(alignment: .firstTextBaseline, spacing: 1) {
-                    Text("\(item.utilization)")
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
-                        .foregroundColor(item.statusLevel.color)
+                // Percentage and reset time
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 1) {
+                        Text("\(item.utilization)")
+                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                            .foregroundColor(item.statusLevel.color)
 
-                    Text("%")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(item.statusLevel.color)
+                        Text("%")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(item.statusLevel.color)
+                    }
+
+                    if let remaining = item.resetTimeRemaining {
+                        Text(remaining)
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
 
@@ -127,7 +135,7 @@ struct UsageCardCompactView: View {
         )
 
         UsageCardView(
-            item: UsageItem(key: "seven_day_opus", utilization: 100, resetsAt: Date().addingTimeInterval(1800))
+            item: UsageItem(key: "seven_day_opus", utilization: 100, resetsAt: nil)
         )
 
         UsageCardView(
@@ -152,37 +160,19 @@ struct UsageCardCompactView: View {
         // Compact grid for other items
         HStack(spacing: 8) {
             UsageCardCompactView(
-                item: UsageItem(key: "seven_day_opus", utilization: 100, resetsAt: nil)
+                item: UsageItem(key: "seven_day_opus", utilization: 100, resetsAt: Date().addingTimeInterval(86400 * 2 + 3600 * 5))
             )
             UsageCardCompactView(
-                item: UsageItem(key: "seven_day_sonnet", utilization: 85, resetsAt: nil)
-            )
-        }
-
-        HStack(spacing: 8) {
-            UsageCardCompactView(
-                item: UsageItem(key: "seven_day_haiku", utilization: 30, resetsAt: nil)
-            )
-            UsageCardCompactView(
-                item: UsageItem(key: "seven_day_code", utilization: 55, resetsAt: nil)
+                item: UsageItem(key: "seven_day_sonnet", utilization: 85, resetsAt: Date().addingTimeInterval(86400 * 3))
             )
         }
 
         HStack(spacing: 8) {
             UsageCardCompactView(
-                item: UsageItem(key: "seven_day_vision", utilization: 12, resetsAt: nil)
+                item: UsageItem(key: "seven_day_haiku", utilization: 30, resetsAt: Date().addingTimeInterval(3600 * 2 + 1800))
             )
             UsageCardCompactView(
-                item: UsageItem(key: "seven_day_tools", utilization: 92, resetsAt: nil)
-            )
-        }
-
-        HStack(spacing: 8) {
-            UsageCardCompactView(
-                item: UsageItem(key: "seven_day_api", utilization: 78, resetsAt: nil)
-            )
-            UsageCardCompactView(
-                item: UsageItem(key: "seven_day_oauth", utilization: 5, resetsAt: nil)
+                item: UsageItem(key: "seven_day_code", utilization: 55, resetsAt: Date().addingTimeInterval(1800))
             )
         }
     }
@@ -194,28 +184,19 @@ struct UsageCardCompactView: View {
     VStack(spacing: 8) {
         HStack(spacing: 8) {
             UsageCardCompactView(
-                item: UsageItem(key: "seven_day_opus", utilization: 100, resetsAt: nil)
+                item: UsageItem(key: "seven_day_opus", utilization: 100, resetsAt: Date().addingTimeInterval(86400 * 2 + 3600 * 5))
             )
             UsageCardCompactView(
-                item: UsageItem(key: "seven_day_sonnet", utilization: 85, resetsAt: nil)
-            )
-        }
-
-        HStack(spacing: 8) {
-            UsageCardCompactView(
-                item: UsageItem(key: "seven_day_haiku", utilization: 30, resetsAt: nil)
-            )
-            UsageCardCompactView(
-                item: UsageItem(key: "seven_day_code", utilization: 55, resetsAt: nil)
+                item: UsageItem(key: "seven_day_sonnet", utilization: 85, resetsAt: Date().addingTimeInterval(86400 * 3))
             )
         }
 
         HStack(spacing: 8) {
             UsageCardCompactView(
-                item: UsageItem(key: "seven_day_vision", utilization: 12, resetsAt: nil)
+                item: UsageItem(key: "seven_day_haiku", utilization: 30, resetsAt: Date().addingTimeInterval(3600 * 2 + 1800))
             )
             UsageCardCompactView(
-                item: UsageItem(key: "seven_day_tools", utilization: 92, resetsAt: nil)
+                item: UsageItem(key: "seven_day_code", utilization: 55, resetsAt: Date().addingTimeInterval(1800))
             )
         }
     }

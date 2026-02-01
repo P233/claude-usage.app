@@ -49,6 +49,9 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
     /// Timer to resume refresh when primary usage resets
     private var resumeRefreshTimer: Timer?
 
+    /// Set of already-processed reset times to avoid triggering multiple refreshes
+    private var processedResetTimes: Set<Date> = []
+
     /// Wake notification observer (must be removed on deinit)
     private var wakeObserver: NSObjectProtocol?
 
@@ -241,6 +244,30 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
         }
         let remaining = Int(nextRefresh.timeIntervalSince(Date()))
         secondsUntilNextRefresh = max(0, remaining)
+
+        // Check if any usage item's reset time has just expired
+        checkForExpiredResetTimes()
+    }
+
+    /// Checks if any usage item's reset time has expired and triggers a refresh.
+    private func checkForExpiredResetTimes() {
+        guard !isRefreshing else { return }
+        guard let items = usageSummary?.items else { return }
+
+        let now = Date()
+        for item in items {
+            guard let resetsAt = item.resetsAt else { continue }
+
+            // If resetsAt has expired and hasn't been processed yet
+            if resetsAt <= now && !processedResetTimes.contains(resetsAt) {
+                processedResetTimes.insert(resetsAt)
+                logger.info("Usage item '\(item.key)' reset time expired, forcing refresh")
+                Task { @MainActor in
+                    await self.refreshNow()
+                }
+                return // Only trigger one refresh at a time
+            }
+        }
     }
 
     func refreshNow() async {
@@ -286,6 +313,7 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
 
             self.usageSummary = summary
             self.retryCount = 0
+            self.processedResetTimes.removeAll()
             saveCache(summary)
 
             if summary.isPrimaryAtLimit {

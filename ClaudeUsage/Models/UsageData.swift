@@ -247,74 +247,95 @@ struct UsageItem: Identifiable {
     }
 
     /// Reset time display for short intervals (5-hour style)
+    /// e.g., "14:30 · in 2h 30m"
     var resetTimeDisplay: String? {
-        guard let resetsAt = resetsAt else { return nil }
-        let interval = resetsAt.timeIntervalSince(Date())
-        if interval <= 0 { return "Resetting..." }
-
-        let totalSeconds = max(0, Int(interval))
-        let timeStr = formatResetTime(resetsAt)
-        let remaining = formatRemainingTime(
-            hours: totalSeconds / Constants.Time.secondsPerHour,
-            minutes: (totalSeconds % Constants.Time.secondsPerHour) / Constants.Time.secondsPerMinute
-        )
-
-        return "\(timeStr) · \(remaining)"
+        switch timeComponentsResult {
+        case .none: return nil
+        case .expired: return Self.updatingText
+        case .valid(let tc):
+            let timeStr = formatResetTime(tc.date)
+            let remaining = formatRemainingTime(hours: tc.hours, minutes: tc.minutes)
+            return "\(timeStr) · \(remaining)"
+        }
     }
 
     /// Short reset time for menubar display (e.g., "14:30")
     var resetTimeShort: String? {
-        guard let resetsAt = resetsAt else { return nil }
-        let interval = resetsAt.timeIntervalSince(Date())
-        if interval <= 0 { return nil }
-
-        return DateFormatters.timeOnly.string(from: roundToNearestMinute(resetsAt))
+        switch timeComponentsResult {
+        case .none: return nil
+        case .expired: return Self.updatingText
+        case .valid(let tc):
+            return DateFormatters.timeOnly.string(from: roundToNearestMinute(tc.date))
+        }
     }
 
-    /// Compact remaining time for menubar display (e.g., "2h30m", "45m", "5m")
+    /// Compact remaining time (e.g., "3d5h", "2h30m", "45m")
     var resetTimeRemaining: String? {
-        guard let resetsAt = resetsAt else { return nil }
-        let interval = resetsAt.timeIntervalSince(Date())
-        if interval <= 0 { return nil }
-
-        let totalMinutes = Int(interval) / Constants.Time.secondsPerMinute
-        let hours = totalMinutes / 60
-        let minutes = totalMinutes % 60
-
-        if hours > 0 {
-            return minutes > 0 ? "\(hours)h\(minutes)m" : "\(hours)h"
-        } else {
-            return "\(max(1, minutes))m"
+        switch timeComponentsResult {
+        case .none: return nil
+        case .expired: return Self.updatingText
+        case .valid(let tc):
+            if tc.days > 0 {
+                return tc.hours > 0 ? "\(tc.days)d\(tc.hours)h" : "\(tc.days)d"
+            } else if tc.hours > 0 {
+                return tc.minutes > 0 ? "\(tc.hours)h\(tc.minutes)m" : "\(tc.hours)h"
+            } else {
+                return "\(max(1, tc.minutes))m"
+            }
         }
     }
 
     /// Reset time display for longer intervals (7-day style)
+    /// e.g., "Jan 5 · in 3d 5h" or "14:30 · in 2h 30m" (if today)
     var resetTimeDisplayLong: String? {
-        guard let resetsAt = resetsAt else { return nil }
-        let interval = resetsAt.timeIntervalSince(Date())
-        if interval <= 0 { return "Resetting..." }
-
-        let rounded = roundToNearestMinute(resetsAt)
-        let calendar = Calendar.current
-        let totalSeconds = max(0, Int(interval))
-        let days = totalSeconds / Constants.Time.secondsPerDay
-        let hours = (totalSeconds % Constants.Time.secondsPerDay) / Constants.Time.secondsPerHour
-        let minutes = (totalSeconds % Constants.Time.secondsPerHour) / Constants.Time.secondsPerMinute
-
-        if calendar.isDateInToday(rounded) {
-            let timeStr = DateFormatters.timeOnly.string(from: rounded)
-            let remaining = formatRemainingTime(hours: hours, minutes: minutes)
-            return "\(timeStr) · \(remaining)"
-        } else {
-            let dateStr = DateFormatters.monthDay.string(from: rounded)
-            let remaining = days > 0 ? "in \(days)d \(hours)h" : "in \(hours)h"
-            return "\(dateStr) · \(remaining)"
+        switch timeComponentsResult {
+        case .none: return nil
+        case .expired: return Self.updatingText
+        case .valid(let tc):
+            let rounded = roundToNearestMinute(tc.date)
+            if Calendar.current.isDateInToday(rounded) {
+                let timeStr = DateFormatters.timeOnly.string(from: rounded)
+                let remaining = formatRemainingTime(hours: tc.hours, minutes: tc.minutes)
+                return "\(timeStr) · \(remaining)"
+            } else {
+                let dateStr = DateFormatters.monthDay.string(from: rounded)
+                let remaining = tc.days > 0 ? "in \(tc.days)d \(tc.hours)h" : "in \(tc.hours)h"
+                return "\(dateStr) · \(remaining)"
+            }
         }
     }
 
     // MARK: - Private Helpers
 
-    /// Round date to nearest minute for consistent display
+    private static let updatingText = "Updating..."
+
+    private struct TimeComponents {
+        let date: Date
+        let days: Int
+        let hours: Int
+        let minutes: Int
+    }
+
+    private enum TimeComponentsResult {
+        case none
+        case expired
+        case valid(TimeComponents)
+    }
+
+    private var timeComponentsResult: TimeComponentsResult {
+        guard let resetsAt = resetsAt else { return .none }
+        let interval = resetsAt.timeIntervalSince(Date())
+        guard interval > 0 else { return .expired }
+
+        let totalSeconds = Int(interval)
+        return .valid(TimeComponents(
+            date: resetsAt,
+            days: totalSeconds / Constants.Time.secondsPerDay,
+            hours: (totalSeconds % Constants.Time.secondsPerDay) / Constants.Time.secondsPerHour,
+            minutes: (totalSeconds % Constants.Time.secondsPerHour) / Constants.Time.secondsPerMinute
+        ))
+    }
+
     private func roundToNearestMinute(_ date: Date) -> Date {
         let seconds = Calendar.current.component(.second, from: date)
         let adjustment = seconds >= 30 ? (60 - seconds) : -seconds
@@ -327,7 +348,6 @@ struct UsageItem: Identifiable {
         if calendar.isDateInToday(rounded) {
             return DateFormatters.timeOnly.string(from: rounded)
         } else if calendar.isDateInTomorrow(rounded) {
-            // Use short form "Tmr" instead of "Tomorrow"
             return "Tmr \(DateFormatters.timeOnly.string(from: rounded))"
         } else {
             return DateFormatters.dateTime.string(from: rounded)
