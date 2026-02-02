@@ -23,8 +23,13 @@ struct UsageCardView: View {
 
                 Spacer()
 
+                // Show reset time or "Ready" when resetsAt is null
                 if let resetTime = item.useLongResetDisplay ? item.resetTimeDisplayLong : item.resetTimeDisplay {
                     Text(resetTime)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                } else if let remaining = item.resetTimeRemaining {
+                    Text(remaining)
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
