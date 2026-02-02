@@ -184,13 +184,13 @@ struct StatusBarContentView: View {
 
                             Circle()
                                 .fill(viewModel.statusColor)
-                                .frame(width: 5, height: 5)
+                                .frame(width: 6, height: 6)
                         }
 
                         // Show remaining time, fallback to "5h" when resetting
                         Text(primary.resetTimeRemaining ?? Self.defaultRemaining)
                             .font(.system(size: 8, weight: .regular, design: .rounded))
-                            .opacity(0.6)
+                            .opacity(0.8)
                             .fixedSize()
                     }
                 } else if viewModel.isRefreshing {
