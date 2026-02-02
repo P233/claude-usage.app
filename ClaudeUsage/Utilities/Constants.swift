@@ -61,7 +61,7 @@ enum Constants {
             if appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
                 return NSColor.white.withAlphaComponent(0.05)
             } else {
-                return NSColor.white.withAlphaComponent(0.85)
+                return NSColor.white.withAlphaComponent(0.75)
             }
         })
     }
