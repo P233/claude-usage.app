@@ -216,10 +216,10 @@ refreshService.$secondsUntilNextRefresh → $secondsUntilNextRefresh
 - Loaded on service init, used while fetching fresh data
 - Cleared on logout or cache expiration
 
-**System Wake from Sleep**:
+**System Sleep/Wake**:
 
-- Observer on `NSWorkspace.didWakeNotification`
-- Immediately refresh + restart auto-refresh timer
+- Observer on `NSWorkspace.willSleepNotification`: stop all timers before sleep (prevents Power Nap from triggering API requests or reset sounds)
+- Observer on `NSWorkspace.didWakeNotification`: immediately refresh + restart auto-refresh timer
 - Handles stale `nextRefreshDate` after sleep
 
 **Primary Usage at Limit (100%)**:

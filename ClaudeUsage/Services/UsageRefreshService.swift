@@ -52,7 +52,8 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
     /// Set of already-processed reset times to avoid triggering multiple refreshes
     private var processedResetTimes: Set<Date> = []
 
-    /// Wake notification observer (must be removed on deinit)
+    /// Sleep/wake notification observers (must be removed on deinit)
+    private var sleepObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
 
     // Cached date formatters for performance
@@ -88,6 +89,9 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
         refreshTimer?.invalidate()
         countdownTimer?.invalidate()
         resumeRefreshTimer?.invalidate()
+        if let observer = sleepObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
         if let observer = wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
@@ -134,6 +138,23 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
     }
 
     private func setupWakeObserver() {
+        sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+
+            // Stop all timers before sleep to prevent Power Nap from triggering
+            // API requests or reset sounds. The Task executes on the main actor
+            // before the system completes the sleep transition. The wake handler
+            // also defensively cleans up resumeRefreshTimer as a safety net.
+            Task { @MainActor in
+                logger.info("System going to sleep, stopping all timers")
+                self.stopAllTimers()
+            }
+        }
+
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
