@@ -101,6 +101,12 @@ struct UsagePeriodResponse: Codable {
     let utilization: Int
     let resetsAt: String?
 
+    /// Memberwise initializer (also used by tests)
+    init(utilization: Int, resetsAt: String?) {
+        self.utilization = utilization
+        self.resetsAt = resetsAt
+    }
+
     enum CodingKeys: String, CodingKey {
         case utilization
         case resetsAt = "resets_at"
@@ -110,6 +116,11 @@ struct UsagePeriodResponse: Codable {
 /// Dynamic usage response - parses any fields from the API
 struct UsageResponse {
     let items: [String: UsagePeriodResponse]
+
+    /// Memberwise initializer (also used by tests)
+    init(items: [String: UsagePeriodResponse]) {
+        self.items = items
+    }
 
     /// Ordered keys based on priority:
     /// 1. five_hour

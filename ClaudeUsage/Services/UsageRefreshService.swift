@@ -30,7 +30,7 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
     @Published private(set) var secondsUntilNextRefresh: Int = 0
 
     private let apiClient: ClaudeAPIClientProtocol
-    private let authService: AuthenticationService
+    private let authService: AuthenticationServiceProtocol
     private let settings: UserSettings
     private var refreshTimer: Timer?
     private var countdownTimer: Timer?
@@ -71,7 +71,7 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
 
     init(
         apiClient: ClaudeAPIClientProtocol,
-        authService: AuthenticationService,
+        authService: AuthenticationServiceProtocol,
         settings: UserSettings? = nil
     ) {
         self.apiClient = apiClient
@@ -98,9 +98,8 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
     }
 
     private func setupAuthStateObserver() {
-        authService.$authState
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] state in
+        authService.authStatePublisher
+            .sink { [weak self] (state: AuthState) in
                 guard let self = self else { return }
 
                 // Cancel and wait for previous task to complete
@@ -313,7 +312,7 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
     }
 
     private func performRefresh() async {
-        guard case .authenticated(let organizationId, _) = authService.authState else {
+        guard let organizationId = authService.authState.organizationId else {
             lastError = "Not authenticated"
             return
         }

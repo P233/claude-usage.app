@@ -328,6 +328,13 @@ ClaudeUsage/
 ├── ViewModels/               # UI state (AppViewModel)
 ├── Views/                    # SwiftUI components
 └── Utilities/                # Constants, helpers
+
+ClaudeUsageTests/
+├── UsageRefreshServiceTests.swift  # Unit tests with lightweight test framework
+└── Mocks/                          # Mock services for testing
+    ├── MockAuthenticationService.swift
+    ├── MockClaudeAPIClient.swift
+    └── MockUserSettings.swift
 ```
 
 ## API Endpoints
@@ -353,6 +360,16 @@ All calls go to `claude.ai`:
 ```
 
 Requires: macOS 13.0+, Xcode Command Line Tools
+
+## Testing
+
+```bash
+./run-tests.sh  # Compiles and runs unit tests
+```
+
+- Uses lightweight custom test framework (no XCTest dependency)
+- Mock services enable isolated unit testing of `UsageRefreshService`
+- Services use protocol-based dependency injection (`ClaudeAPIClientProtocol`, `AuthenticationServiceProtocol`)
 
 ## Important Notes
 

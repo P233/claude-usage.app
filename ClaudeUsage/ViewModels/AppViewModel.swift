@@ -96,29 +96,12 @@ final class AppViewModel: ObservableObject {
     }
 
     private func setupBindings() {
-        authService.$authState
-            .receive(on: DispatchQueue.main)
-            .assign(to: &$authState)
-
-        refreshService.$usageSummary
-            .receive(on: DispatchQueue.main)
-            .assign(to: &$usageSummary)
-
-        refreshService.$extraUsage
-            .receive(on: DispatchQueue.main)
-            .assign(to: &$extraUsage)
-
-        refreshService.$isRefreshing
-            .receive(on: DispatchQueue.main)
-            .assign(to: &$isRefreshing)
-
-        refreshService.$lastError
-            .receive(on: DispatchQueue.main)
-            .assign(to: &$lastError)
-
-        refreshService.$secondsUntilNextRefresh
-            .receive(on: DispatchQueue.main)
-            .assign(to: &$secondsUntilNextRefresh)
+        authService.$authState.assign(to: &$authState)
+        refreshService.$usageSummary.assign(to: &$usageSummary)
+        refreshService.$extraUsage.assign(to: &$extraUsage)
+        refreshService.$isRefreshing.assign(to: &$isRefreshing)
+        refreshService.$lastError.assign(to: &$lastError)
+        refreshService.$secondsUntilNextRefresh.assign(to: &$secondsUntilNextRefresh)
     }
 
     // MARK: - Actions
@@ -144,6 +127,7 @@ final class AppViewModel: ObservableObject {
             guard bootstrap.hasValidAccount, let organizationId = bootstrap.organizationId else {
                 logger.error("No organization found in bootstrap response")
                 lastError = "No organization found"
+                authState = .error("No organization found")
                 return
             }
 
@@ -163,6 +147,7 @@ final class AppViewModel: ObservableObject {
         } catch {
             logger.error("Failed to process login: \(error.localizedDescription)")
             lastError = error.localizedDescription
+            authState = .error(error.localizedDescription)
         }
     }
 
@@ -172,7 +157,7 @@ final class AppViewModel: ObservableObject {
     }
 
     func toggleExtraUsage(enabled: Bool) async throws {
-        guard case .authenticated(let orgId, _) = authState else {
+        guard let orgId = authState.organizationId else {
             logger.warning("Attempted to toggle extra usage while not authenticated")
             return
         }

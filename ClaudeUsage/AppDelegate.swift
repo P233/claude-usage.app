@@ -68,7 +68,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             viewModel.$authState,
             viewModel.$isRefreshing
         )
-        .receive(on: DispatchQueue.main)
         .sink { [weak self] _ in
             self?.updateStatusBarContent()
         }
