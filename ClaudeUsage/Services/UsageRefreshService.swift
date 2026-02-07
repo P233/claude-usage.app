@@ -234,9 +234,7 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
 
         refreshTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                await self.refreshNow()
-                self.nextRefreshDate = Date().addingTimeInterval(self.settings.refreshInterval.seconds)
+                await self?.refreshNow()
             }
         }
 
@@ -262,8 +260,8 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
         resumeRefreshTimer = nil
     }
 
-    /// Starts a 60-second countdown timer targeting the reset time.
-    /// This keeps the UI updated (menubar + popover) while auto-refresh is paused.
+    /// Starts a 60-second countdown timer targeting the reset time, aligned to system clock
+    /// minute boundaries. This keeps the UI updated (menubar + popover) while auto-refresh is paused.
     private func startResetCountdown(resetsAt: Date?) {
         guard let resetsAt = resetsAt else { return }
 
@@ -272,9 +270,22 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
         nextRefreshDate = resetsAt
         updateCountdown()
 
-        countdownTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+        // Align first tick to next minute boundary (e.g., 14:23:45 → fires at 14:24:00)
+        let secondsIntoMinute = Calendar.current.component(.second, from: Date())
+        let delayToNextMinute = TimeInterval(60 - secondsIntoMinute)
+
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: delayToNextMinute, repeats: false) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.updateCountdown()
+                guard let self = self, self.nextRefreshDate != nil else { return }
+                self.updateCountdown()
+
+                // Continue with repeating 60s timer aligned to clock
+                self.countdownTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        guard let self = self, self.nextRefreshDate != nil else { return }
+                        self.updateCountdown()
+                    }
+                }
             }
         }
     }

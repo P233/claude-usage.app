@@ -322,7 +322,8 @@ final class UsageRefreshServiceTests {
         await waitForRefresh()
 
         let countdownAfter = sut.secondsUntilNextRefresh
-        assertTrue(countdownAfter > 0, "Should still have reset countdown after manual refresh")
+        assertTrue(countdownAfter > 3500,
+                   "Should count to resetsAt (~1h), not refresh interval, got \(countdownAfter)")
     }
 
     func testResetCountdown_ClearedByStopAutoRefresh() async {
@@ -406,6 +407,44 @@ final class UsageRefreshServiceTests {
         // Should have reset countdown again (not normal auto-refresh countdown)
         assertTrue(sut.secondsUntilNextRefresh > 3500,
                    "Should restore reset countdown (~1h), got \(sut.secondsUntilNextRefresh)")
+    }
+
+    func testResetCountdown_RecoveryFromLimitResumesAutoRefresh() async {
+        TestRunner.shared.startTest("Recovery from 100% resumes normal auto-refresh")
+
+        // Start at 100%
+        mockAPIClient.fetchUsageResult = .success(makeUsageResponse(
+            fiveHourUtil: 100,
+            resetsAt: Date().addingTimeInterval(3600)
+        ))
+
+        sut = createService()
+        await waitForRefresh()
+
+        sut.startAutoRefresh()
+        await waitForRefresh()
+
+        // Confirm we're in Mode B (reset countdown, ~3600s)
+        assertTrue(sut.secondsUntilNextRefresh > 3500,
+                   "Should be counting to resetsAt, got \(sut.secondsUntilNextRefresh)")
+
+        // Simulate reset: utilization drops to 0%
+        mockAPIClient.fetchUsageResult = .success(makeUsageResponse(fiveHourUtil: 0))
+
+        // Manual refresh triggers the transition
+        await sut.refreshNow()
+        await waitForRefresh()
+
+        assertEqual(sut.usageSummary?.primaryItem?.utilization, 0, "Utilization should be 0 after reset")
+
+        // Now startAutoRefresh should enter Mode A (normal countdown to refresh interval)
+        sut.startAutoRefresh()
+        await waitForRefresh()
+
+        let countdown = sut.secondsUntilNextRefresh
+        let maxExpected = Int(settings.refreshInterval.seconds)
+        assertTrue(countdown > 0 && countdown <= maxExpected,
+                   "Should be normal auto-refresh countdown (1-\(maxExpected)s), got \(countdown)")
     }
 
     func testResetDetection_UtilizationUpdates() async {
@@ -535,6 +574,10 @@ final class UsageRefreshServiceTests {
 
         await setUp()
         await testResetCountdown_SleepWakeWhileAtLimit()
+        tearDown()
+
+        await setUp()
+        await testResetCountdown_RecoveryFromLimitResumesAutoRefresh()
         tearDown()
 
         await setUp()

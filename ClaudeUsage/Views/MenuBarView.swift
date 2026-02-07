@@ -479,9 +479,12 @@ struct MenuBarView: View {
                     .scaleEffect(0.45)
                     .frame(width: 11, height: 11)
             } else if viewModel.usageSummary != nil {
-                if viewModel.isPrimaryAtLimit {
-                    // Show countdown to reset time
-                    Text(formatResetCountdown(viewModel.secondsUntilNextRefresh))
+                if viewModel.isPrimaryAtLimit,
+                   let remaining = viewModel.usageSummary?.primaryItem?.resetTimeRemaining {
+                    // Same computed source as menubar/card; add prefix when counting down
+                    let text = viewModel.secondsUntilNextRefresh > 0
+                        ? "resets in \(remaining)" : remaining
+                    Text(text)
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                 } else if viewModel.secondsUntilNextRefresh > 0 {
@@ -517,19 +520,6 @@ struct MenuBarView: View {
             return "in \(seconds)s"
         } else {
             return "in \(seconds / Constants.Time.secondsPerMinute)m"
-        }
-    }
-
-    private func formatResetCountdown(_ seconds: Int) -> String {
-        if seconds <= 0 {
-            return "Resetting..."
-        }
-        let hours = seconds / Constants.Time.secondsPerHour
-        let minutes = (seconds % Constants.Time.secondsPerHour) / Constants.Time.secondsPerMinute
-        if hours > 0 {
-            return "resets in \(hours)h \(minutes)m"
-        } else {
-            return "resets in \(minutes)m"
         }
     }
 

@@ -4,15 +4,17 @@
 
 A macOS menubar application that displays Claude.ai usage statistics in real-time. Built with Swift 5.9 and SwiftUI, targeting macOS 13.0+.
 
+**Tech Stack**: Swift async/await + Combine, SwiftUI + AppKit (NSStatusItem), Keychain + UserDefaults, URLSession, os.log. No external dependencies.
+
 ## Core Features
 
 ### 1. Authentication
 
 - **Login Flow**: Open WebView → load `claude.ai/login` → user logs in → extract session cookies
-- **Cookie Storage**: Store in macOS Keychain with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` (encrypted, device-only)
-- **Bootstrap**: Call `/api/bootstrap` to get organization ID and subscription tier (Free/Pro/Team/Enterprise)
-- **Session Management**: Detect 401/403 responses as session expiry, prompt re-login
-- **Cookie Validation**: Whitelist only `claude.ai` and `anthropic.com` domains, check expiration
+- **Cookie Storage**: macOS Keychain with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`
+- **Bootstrap**: Call `/api/bootstrap` to get organization ID and subscription tier
+- **Session Management**: Detect 401/403 as session expiry, prompt re-login
+- **Cookie Validation**: Whitelist only `claude.ai` and `anthropic.com` domains
 
 ### 2. Usage Data Fetching
 
@@ -25,42 +27,24 @@ A macOS menubar application that displays Claude.ai usage statistics in real-tim
 ### 3. Menubar Display
 
 - **Status Item**: Multi-line text showing primary usage percentage and reset time
-- **Color Coding**:
-  - Green (normal): utilization < 80%
-  - Yellow (warning): 80% ≤ utilization < 100%
-  - Red (critical): utilization ≥ 100%
-- **Popover Menu**:
-  - Header: "Claude Usage" + subscription tier badge
-  - Usage cards: Full-width for primary items (five_hour, seven_day)
-  - Compact grid: 2-column layout when items exceed threshold
-  - Each card shows: title, percentage, progress bar, reset time countdown
-  - Refresh countdown/button (shows "resets in Xh Ym" when at 100%)
+- **Color Coding**: Green (< 80%), Orange (80-99%), Red (≥ 100%)
+- **Popover Menu**: Header with tier badge, usage cards (full-width primary, 2-column grid for others), refresh countdown/button
 
 ### 4. Reset Time Management
 
-- **Time Parsing**: Convert ISO `resets_at` to remaining days/hours/minutes
-- **Display Formats**:
-  - Short (5-hour): `"14:30 · in 2h 30m"`
-  - Long (7-day): `"Jan 5 · in 3d 5h"` or `"14:30 · in 2h 30m"` if today
-  - Null reset time: `"Ready"` (shown in both menubar and panel)
-- **Auto-Refresh Pause**: When primary (five_hour) reaches 100%, pause polling
-- **Reset Detection**: When utilization drops (reset occurred), resume polling
-- **Sound Alert**: Optional notification sound when quota resets
+- **Display Formats**: Short `"14:30 · in 2h 30m"`, Long `"Jan 5 · in 3d 5h"`, Null `"Ready"`
+- **Auto-Refresh Pause**: When primary reaches 100%, pause API polling
+- **Reset Detection**: When utilization drops to 0, play notification sound (if enabled)
 
 ### 5. Extra Usage (Billing)
 
-- **Prepaid Credits**: `GET /api/organizations/{id}/prepaid/credits` - balance and auto-reload status
-- **Spend Limit**: `GET /api/organizations/{id}/overage_spend_limit` - monthly limit and used amount
-- **Display**: Used credits / monthly limit with progress bar, currency formatting
-- **Toggle**: Enable/disable extra usage via `PUT /api/organizations/{id}/overage_spend_limit`
-- **Browser Link**: "Manage in Browser" opens `claude.ai/settings/usage`
+- **Prepaid Credits**: `GET /api/organizations/{id}/prepaid/credits`
+- **Spend Limit**: `GET /api/organizations/{id}/overage_spend_limit`
+- **Toggle**: Enable/disable via `PUT`, "Manage in Browser" links to `claude.ai/settings/usage`
 
 ### 6. Settings
 
-- **Auto Refresh Interval**: Picker with 1, 2, 3, 5, 10 minute options
-- **Reset Sound**: Selector for notification sound (or off)
-- **Log Out**: Clear Keychain credentials and reset state
-- **Quit**: Terminate application
+- Auto Refresh Interval, Reset Sound selector, Log Out, Quit
 
 ## Architecture
 
@@ -70,12 +54,7 @@ A macOS menubar application that displays Claude.ai usage statistics in real-tim
 Views (SwiftUI) → ViewModel (AppViewModel) → Services → API/Storage
 ```
 
-- `AppViewModel`: Central coordinator with Combine publishers
-- `Services/`: Business logic (auth, API, refresh scheduling)
-- `Models/`: Data structures and API response types
-- `Views/`: SwiftUI components
-
-### Service Dependencies & Initialization Order
+### Service Dependencies
 
 ```
 UserSettings.shared (singleton)
@@ -89,19 +68,7 @@ UsageRefreshService (depends on APIClient, AuthService, Settings)
 AppViewModel (coordinates all above, exposes @Published properties)
 ```
 
-**Initialization in AppViewModel**:
-
-```swift
-convenience init() {
-    let settings = UserSettings.shared
-    let authService = AuthenticationService()
-    let apiClient = ClaudeAPIClient(authService: authService)
-    let refreshService = UsageRefreshService(apiClient, authService, settings)
-    self.init(authService, apiClient, refreshService, settings)
-}
-```
-
-### UI State Machine (AuthState)
+### AuthState Machine
 
 ```
                     ┌─────────────┐
@@ -124,203 +91,31 @@ convenience init() {
                     (cycle repeats)
 ```
 
-**State Transitions**:
-
-- `unknown` → `authenticating`: On app launch, call `checkStoredCredentials()`
-- `authenticating` → `authenticated`: Valid cookies found in Keychain + bootstrap success
-- `authenticating` → `notAuthenticated`: No stored credentials or expired
-- `authenticating` → `error`: Keychain access failed or API error
-- `authenticated` → `notAuthenticated`: User logout or 401/403 from API
-- Any state → `authenticating`: Re-check credentials
-
-### Data Flow
-
-**1. Login Success Flow**:
-
-```
-WebView login complete
-       ↓
-AppViewModel.onLoginSuccess(cookies)
-       ↓
-APIClient.fetchBootstrap(cookies) → get orgId, subscriptionType
-       ↓
-AuthService.saveSession(cookies, orgId, subscriptionType)
-       ↓
-Keychain storage + AuthState → .authenticated
-       ↓
-UsageRefreshService observes authState change
-       ↓
-refreshNow() + startAutoRefresh()
-```
-
-**2. Usage Refresh Flow**:
-
-```
-Timer fires or manual refresh
-       ↓
-UsageRefreshService.refreshNow()
-       ↓
-Check: isRefreshing? isAuthenticated? NetworkMonitor.isConnected?
-       ↓
-APIClient.fetchUsage(organizationId)
-       ↓
-processUsageResponse() → UsageSummary
-       ↓
-Check: isPrimaryAtLimit? → pause auto-refresh, schedule resume
-       ↓
-checkForResetAndPlaySound() → compare with lastUtilization
-       ↓
-Update @Published usageSummary → Combine → AppViewModel → Views
-       ↓
-saveCache() to UserDefaults
-       ↓
-fetchExtraUsageData() (parallel: credits + spendLimit)
-```
-
-**3. Combine Bindings (Service → ViewModel)**:
-
-```swift
-// In AppViewModel.setupBindings()
-authService.$authState → $authState
-refreshService.$usageSummary → $usageSummary
-refreshService.$extraUsage → $extraUsage
-refreshService.$isRefreshing → $isRefreshing
-refreshService.$lastError → $lastError
-refreshService.$secondsUntilNextRefresh → $secondsUntilNextRefresh
-```
-
 ### Edge Cases & Error Handling
 
-**Network Disconnected**:
-
-- `NetworkMonitor.shared.isConnected` checked before each refresh
-- If disconnected: set `lastError = "No network connection"`, skip API call
-- Auto-refresh timer continues, will retry on next tick
-
-**Session Expired (401/403)**:
-
-- `ClaudeAPIClient` throws `APIError.sessionExpired`
-- `AuthenticationService` sets `authState = .notAuthenticated`
-- UI shows login prompt, user must re-authenticate
-
-**API Errors with Retry**:
-
-- Max 3 retries with exponential backoff (30s, 60s, 120s)
-- `retryCount` resets on successful refresh or auth state change
-- After max retries: wait for next scheduled refresh
-
-**Cache Behavior**:
-
-- Cache key: `cachedUsageSummary_v2` in UserDefaults
-- Max age: 3600 seconds (1 hour)
-- Loaded on service init, used while fetching fresh data
-- Cleared on logout or cache expiration
-
-**System Sleep/Wake**:
-
-- Observer on `NSWorkspace.willSleepNotification`: stop all timers before sleep (prevents Power Nap from triggering API requests or reset sounds)
-- Observer on `NSWorkspace.didWakeNotification`: immediately refresh + restart auto-refresh timer
-- Handles stale `nextRefreshDate` after sleep
+- **Network Disconnected**: Skip API call, set `lastError`, retry on next timer tick
+- **Session Expired (401/403)**: Set `authState = .notAuthenticated`, prompt re-login
+- **API Errors**: Max 3 retries with exponential backoff (30s, 60s, 120s)
+- **Cache**: `cachedUsageSummary_v2` in UserDefaults, max age 1 hour, cleared on logout
+- **System Sleep/Wake**: Stop all timers on sleep (prevents Power Nap API calls/sounds); refresh + restart on wake
 
 **Primary Usage at Limit (100%)**:
 
-- Pause auto-refresh (API polling) to reduce API calls
-- Start 60-second reset countdown timer (`startResetCountdown`) to keep UI updated
-  - `secondsUntilNextRefresh` counts down to primary `resetsAt` (not next API call)
-  - Triggers SwiftUI redraws every 60s so menubar `resetTimeRemaining` stays fresh
-- Popover shows "resets in Xh Ym" + manual refresh button (not loading spinner)
-- Schedule `resumeRefreshTimer` at primary `resetsAt + 5 seconds`
-- On timer fire: refresh + restart auto-refresh
-- Wake from sleep also triggers resume
-- **Non-primary item reset during pause**: The 60s countdown timer calls `updateCountdown()` → `checkForExpiredResetTimes()` on each tick. When a non-primary item's `resetsAt` expires (e.g., seven_day resets while five_hour is still at 100%), it triggers `refreshNow()` to fetch fresh data. If primary is still at limit after refresh, `processedResetTimes` is cleared, timers are re-created with updated reset times, and the pause continues until primary resets.
-
-**Reset Detection**:
-
-- Track `lastUtilization` for primary item
-- If drops from >0 to 0: play notification sound (if enabled)
-- `processedResetTimes` set prevents duplicate refresh triggers within a single refresh cycle; cleared on each successful refresh
-
-## Tech Stack
-
-- **Language**: Swift 5.9
-- **UI**: SwiftUI + AppKit (NSStatusItem for menubar)
-- **Concurrency**: Swift async/await + Combine
-- **Storage**: Keychain (credentials), UserDefaults (settings)
-- **Networking**: URLSession (no third-party dependencies)
-- **Logging**: os.log framework
+- Pause auto-refresh, start 60s reset countdown timer (clock-aligned to minute boundaries)
+- `secondsUntilNextRefresh` counts down to `resetsAt` (not next API call)
+- All display locations (menubar, popover header, usage cards) use `primary.resetTimeRemaining` as unified source
+- Schedule `resumeRefreshTimer` at `resetsAt + 5s` to resume polling
+- Non-primary item reset during pause: `checkForExpiredResetTimes()` triggers refresh on each 60s tick; `processedResetTimes` prevents duplicate triggers
 
 ## Coding Conventions
 
-### Naming
-
-- **Types**: PascalCase (`AppViewModel`, `UsageItem`)
-- **Functions/Variables**: camelCase (`fetchUsage()`, `refreshInterval`)
-- **Constants**: Grouped in `Constants.swift` using nested enums
-
-### Code Organization
-
-Use MARK comments to section code:
-
-```swift
-// MARK: - Published Properties
-// MARK: - Services
-// MARK: - Initialization
-// MARK: - Actions
-// MARK: - Private Helpers
-```
-
-### Concurrency
-
-- Use `@MainActor` for all UI-related classes
-- All async work uses Swift concurrency (async/await)
-- Thread-safe storage with `NSLock` when needed
-
-```swift
-@MainActor
-final class AppViewModel: ObservableObject { }
-```
-
-### Protocols
-
-Define protocols for services to enable testing:
-
-```swift
-protocol ClaudeAPIClientProtocol { }
-protocol AuthenticationServiceProtocol { }
-```
-
-### Error Handling
-
-Use custom error enums with `LocalizedError`:
-
-```swift
-enum APIError: Error, LocalizedError {
-    case notAuthenticated
-    case sessionExpired
-    case httpError(statusCode: Int)
-
-    var errorDescription: String? { ... }
-}
-```
-
-### Logging
-
-Use os.log with per-file loggers:
-
-```swift
-private let logger = Logger(
-    subsystem: Constants.App.bundleIdentifier,
-    category: "ClassName"
-)
-logger.debug("Debug message")
-logger.error("Error: \(error)")
-```
-
-### Performance Patterns
-
-- Cache expensive objects (DateFormatters)
-- Reuse NSHostingView for statusbar updates
-- Use `[weak self]` in closures to prevent retain cycles
+- **Naming**: PascalCase types, camelCase functions/variables, constants in `Constants.swift` nested enums
+- **Code Organization**: Use `// MARK: -` sections
+- **Concurrency**: `@MainActor` for UI classes, async/await for all async work
+- **Protocols**: Define protocols for services to enable testing (`ClaudeAPIClientProtocol`, `AuthenticationServiceProtocol`)
+- **Error Handling**: Custom error enums with `LocalizedError`
+- **Logging**: os.log with per-file `Logger` instances
+- **Performance**: Cache DateFormatters, reuse NSHostingView for statusbar, `[weak self]` in closures
 
 ## File Structure
 
@@ -337,9 +132,6 @@ ClaudeUsage/
 ClaudeUsageTests/
 ├── UsageRefreshServiceTests.swift  # Unit tests with lightweight test framework
 └── Mocks/                          # Mock services for testing
-    ├── MockAuthenticationService.swift
-    ├── MockClaudeAPIClient.swift
-    └── MockUserSettings.swift
 ```
 
 ## API Endpoints
@@ -358,23 +150,15 @@ All calls go to `claude.ai`:
 - Never log sensitive data (cookies, tokens)
 - Use HTTPS for all network requests
 
-## Build
+## Build & Test
 
 ```bash
-./build.sh  # Creates build/ClaudeUsage.app
-```
-
-Requires: macOS 13.0+, Xcode Command Line Tools
-
-## Testing
-
-```bash
+./build.sh      # Creates build/ClaudeUsage.app (requires macOS 13.0+, Xcode CLI Tools)
 ./run-tests.sh  # Compiles and runs unit tests
 ```
 
-- Uses lightweight custom test framework (no XCTest dependency)
-- Mock services enable isolated unit testing of `UsageRefreshService`
-- Services use protocol-based dependency injection (`ClaudeAPIClientProtocol`, `AuthenticationServiceProtocol`)
+- Lightweight custom test framework (no XCTest dependency)
+- Protocol-based dependency injection with mock services
 
 ## Important Notes
 
