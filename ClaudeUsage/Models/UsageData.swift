@@ -305,6 +305,16 @@ struct UsageItem: Identifiable {
         }
     }
 
+    /// Static reset target for at-limit display (e.g., "until 14:30", "until Tmr 14:30")
+    /// Unlike `resetTimeRemaining`, this value doesn't change over time.
+    var resetTimeTarget: String? {
+        switch resetTimeResult {
+        case .none: return nil
+        case .expired: return ResetTimeFormatter.updatingText
+        case .valid(let tc): return "until \(ResetTimeFormatter.formatResetTime(tc.date))"
+        }
+    }
+
     /// Reset time display for longer intervals (7-day style)
     /// e.g., "Jan 5 · in 3d 5h" or "14:30 · in 2h 30m" (if today)
     var resetTimeDisplayLong: String? {

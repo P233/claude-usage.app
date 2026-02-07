@@ -32,7 +32,7 @@ A macOS menubar application that displays Claude.ai usage statistics in real-tim
 
 ### 4. Reset Time Management
 
-- **Display Formats**: Short `"14:30 · in 2h 30m"`, Long `"Jan 5 · in 3d 5h"`, Null `"Ready"`
+- **Display Formats**: Short `"14:30 · in 2h 30m"`, Long `"Jan 5 · in 3d 5h"`, At limit `"until 14:30"`, Null `"Ready"`
 - **Auto-Refresh Pause**: When primary reaches 100%, pause API polling
 - **Reset Detection**: When utilization drops to 0, play notification sound (if enabled)
 

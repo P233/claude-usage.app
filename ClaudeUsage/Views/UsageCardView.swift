@@ -23,8 +23,13 @@ struct UsageCardView: View {
 
                 Spacer()
 
-                // Show reset time or "Ready" when resetsAt is null
-                if let resetTime = item.useLongResetDisplay ? item.resetTimeDisplayLong : item.resetTimeDisplay {
+                // At limit: show static target time (doesn't need timer updates)
+                // Normal: show "14:30 · in 2h 30m" or "Ready"
+                if item.isAtLimit, let target = item.resetTimeTarget {
+                    Text(target)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                } else if let resetTime = item.useLongResetDisplay ? item.resetTimeDisplayLong : item.resetTimeDisplay {
                     Text(resetTime)
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
@@ -112,7 +117,7 @@ struct UsageCardCompactView: View {
                             .foregroundColor(item.statusLevel.color)
                     }
 
-                    if let remaining = item.resetTimeRemaining {
+                    if let remaining = item.isAtLimit ? item.resetTimeTarget : item.resetTimeRemaining {
                         Text(remaining)
                             .font(.system(size: 9))
                             .foregroundColor(.secondary)
