@@ -474,20 +474,25 @@ struct MenuBarView: View {
 
     private var lastUpdatedView: some View {
         HStack(alignment: .center, spacing: 4) {
-            if viewModel.isRefreshing || viewModel.secondsUntilNextRefresh <= 0 {
+            if viewModel.isRefreshing {
                 ProgressView()
                     .scaleEffect(0.45)
                     .frame(width: 11, height: 11)
             } else if viewModel.usageSummary != nil {
-                // Show countdown to next refresh, or time since last update if paused
                 if viewModel.isPrimaryAtLimit {
-                    Text(formatElapsedTime(viewModel.usageSummary?.lastUpdated))
+                    // Show countdown to reset time
+                    Text(formatResetCountdown(viewModel.secondsUntilNextRefresh))
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
-                } else {
+                } else if viewModel.secondsUntilNextRefresh > 0 {
+                    // Show countdown to next auto-refresh
                     Text(formatCountdown(viewModel.secondsUntilNextRefresh))
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
+                } else {
+                    ProgressView()
+                        .scaleEffect(0.45)
+                        .frame(width: 11, height: 11)
                 }
 
                 Button {
@@ -515,15 +520,16 @@ struct MenuBarView: View {
         }
     }
 
-    private func formatElapsedTime(_ date: Date?) -> String {
-        guard let date = date else { return "" }
-        let seconds = max(0, Int(-date.timeIntervalSinceNow))
-        if seconds < Constants.Time.secondsPerMinute {
-            return "< 1m ago"
-        } else if seconds < Constants.Time.secondsPerHour {
-            return "\(seconds / Constants.Time.secondsPerMinute)m ago"
+    private func formatResetCountdown(_ seconds: Int) -> String {
+        if seconds <= 0 {
+            return "Resetting..."
+        }
+        let hours = seconds / Constants.Time.secondsPerHour
+        let minutes = (seconds % Constants.Time.secondsPerHour) / Constants.Time.secondsPerMinute
+        if hours > 0 {
+            return "resets in \(hours)h \(minutes)m"
         } else {
-            return "\(seconds / Constants.Time.secondsPerHour)h ago"
+            return "resets in \(minutes)m"
         }
     }
 

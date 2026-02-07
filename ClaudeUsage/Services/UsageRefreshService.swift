@@ -36,6 +36,9 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
     private var countdownTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
 
+    /// Target date for `secondsUntilNextRefresh` countdown.
+    /// During normal auto-refresh: next API call time.
+    /// During reset countdown (100%): primary item's `resetsAt` time.
     private var nextRefreshDate: Date?
     private var retryCount = 0
     private let maxRetries = 3
@@ -119,6 +122,7 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
                     self.extraUsage = nil
                     self.clearCache()
                     self.lastUtilization = nil
+                    self.processedResetTimes.removeAll()
                 }
             }
             .store(in: &cancellables)
@@ -220,6 +224,7 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
         if let summary = usageSummary, summary.isPrimaryAtLimit {
             logger.info("Primary usage at limit, not starting auto-refresh")
             scheduleResumeRefresh(resetsAt: summary.primaryResetsAt)
+            startResetCountdown(resetsAt: summary.primaryResetsAt)
             return
         }
 
@@ -255,6 +260,23 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
         stopAutoRefresh()
         resumeRefreshTimer?.invalidate()
         resumeRefreshTimer = nil
+    }
+
+    /// Starts a 60-second countdown timer targeting the reset time.
+    /// This keeps the UI updated (menubar + popover) while auto-refresh is paused.
+    private func startResetCountdown(resetsAt: Date?) {
+        guard let resetsAt = resetsAt else { return }
+
+        countdownTimer?.invalidate()
+
+        nextRefreshDate = resetsAt
+        updateCountdown()
+
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.updateCountdown()
+            }
+        }
     }
 
     private func updateCountdown() {
@@ -340,6 +362,7 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
                 logger.info("Primary usage at limit, pausing auto-refresh")
                 stopAutoRefresh()
                 scheduleResumeRefresh(resetsAt: summary.primaryResetsAt)
+                startResetCountdown(resetsAt: summary.primaryResetsAt)
             }
 
             await fetchExtraUsageData(organizationId: organizationId)

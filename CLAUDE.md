@@ -34,7 +34,7 @@ A macOS menubar application that displays Claude.ai usage statistics in real-tim
   - Usage cards: Full-width for primary items (five_hour, seven_day)
   - Compact grid: 2-column layout when items exceed threshold
   - Each card shows: title, percentage, progress bar, reset time countdown
-  - Refresh countdown/button, last updated time
+  - Refresh countdown/button (shows "resets in Xh Ym" when at 100%)
 
 ### 4. Reset Time Management
 
@@ -224,16 +224,21 @@ refreshService.$secondsUntilNextRefresh → $secondsUntilNextRefresh
 
 **Primary Usage at Limit (100%)**:
 
-- Pause auto-refresh to reduce API calls
-- Schedule `resumeRefreshTimer` at `resetsAt + 5 seconds`
+- Pause auto-refresh (API polling) to reduce API calls
+- Start 60-second reset countdown timer (`startResetCountdown`) to keep UI updated
+  - `secondsUntilNextRefresh` counts down to primary `resetsAt` (not next API call)
+  - Triggers SwiftUI redraws every 60s so menubar `resetTimeRemaining` stays fresh
+- Popover shows "resets in Xh Ym" + manual refresh button (not loading spinner)
+- Schedule `resumeRefreshTimer` at primary `resetsAt + 5 seconds`
 - On timer fire: refresh + restart auto-refresh
 - Wake from sleep also triggers resume
+- **Non-primary item reset during pause**: The 60s countdown timer calls `updateCountdown()` → `checkForExpiredResetTimes()` on each tick. When a non-primary item's `resetsAt` expires (e.g., seven_day resets while five_hour is still at 100%), it triggers `refreshNow()` to fetch fresh data. If primary is still at limit after refresh, `processedResetTimes` is cleared, timers are re-created with updated reset times, and the pause continues until primary resets.
 
 **Reset Detection**:
 
 - Track `lastUtilization` for primary item
 - If drops from >0 to 0: play notification sound (if enabled)
-- `processedResetTimes` set prevents duplicate refresh triggers
+- `processedResetTimes` set prevents duplicate refresh triggers within a single refresh cycle; cleared on each successful refresh
 
 ## Tech Stack
 

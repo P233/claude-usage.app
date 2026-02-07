@@ -72,6 +72,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             self?.updateStatusBarContent()
         }
         .store(in: &cancellables)
+
+        // Throttled observation of countdown changes for status bar sizing.
+        // During normal auto-refresh the countdown updates every 1s (too frequent for sizing),
+        // so throttle to at most once per 30s. During reset countdown (100%) the timer fires
+        // every 60s, so every change passes through.
+        viewModel.$secondsUntilNextRefresh
+            .removeDuplicates()
+            .throttle(for: .seconds(30), scheduler: RunLoop.main, latest: true)
+            .sink { [weak self] _ in
+                self?.updateStatusBarContent()
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Status Bar Content

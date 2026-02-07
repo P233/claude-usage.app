@@ -136,18 +136,33 @@ final class UsageRefreshServiceTests {
     }
 
     private func makeUsageResponse(fiveHourUtil: Int, resetsAt: Date? = nil) -> UsageResponse {
-        let resetString: String?
-        if let date = resetsAt {
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            resetString = formatter.string(from: date)
-        } else {
-            resetString = nil
+        makeUsageResponse(fiveHourUtil: fiveHourUtil, fiveHourResetsAt: resetsAt)
+    }
+
+    private func makeUsageResponse(
+        fiveHourUtil: Int,
+        fiveHourResetsAt: Date? = nil,
+        sevenDayUtil: Int? = nil,
+        sevenDayResetsAt: Date? = nil
+    ) -> UsageResponse {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        var items: [String: UsagePeriodResponse] = [
+            "five_hour": UsagePeriodResponse(
+                utilization: fiveHourUtil,
+                resetsAt: fiveHourResetsAt.map { formatter.string(from: $0) }
+            )
+        ]
+
+        if let sevenDayUtil = sevenDayUtil {
+            items["seven_day"] = UsagePeriodResponse(
+                utilization: sevenDayUtil,
+                resetsAt: sevenDayResetsAt.map { formatter.string(from: $0) }
+            )
         }
 
-        return UsageResponse(items: [
-            "five_hour": UsagePeriodResponse(utilization: fiveHourUtil, resetsAt: resetString)
-        ])
+        return UsageResponse(items: items)
     }
 
     private func waitForRefresh() async {
@@ -259,7 +274,138 @@ final class UsageRefreshServiceTests {
         sut.startAutoRefresh()
         await waitForRefresh()
 
-        assertEqual(sut.secondsUntilNextRefresh, 0, "Auto-refresh should pause at 100%")
+        // Auto-refresh timer should be nil (paused), but countdown shows reset time
+        assertTrue(sut.secondsUntilNextRefresh > 0, "Countdown should show time until reset")
+    }
+
+    func testResetCountdown_ShowsCorrectSecondsUntilReset() async {
+        TestRunner.shared.startTest("Reset countdown shows correct seconds until reset")
+
+        let resetTime = Date().addingTimeInterval(7200) // 2 hours from now
+        mockAPIClient.fetchUsageResult = .success(makeUsageResponse(
+            fiveHourUtil: 100,
+            resetsAt: resetTime
+        ))
+
+        sut = createService()
+        await waitForRefresh()
+
+        sut.startAutoRefresh()
+        await waitForRefresh()
+
+        // Countdown should be approximately 7200 seconds (2 hours), allow 10s tolerance
+        let countdown = sut.secondsUntilNextRefresh
+        assertTrue(countdown > 7100 && countdown <= 7200,
+                   "Countdown should be ~7200s until reset, got \(countdown)")
+    }
+
+    func testResetCountdown_ManualRefreshWhileAtLimit() async {
+        TestRunner.shared.startTest("Manual refresh while at limit keeps reset countdown")
+
+        let resetTime = Date().addingTimeInterval(3600)
+        mockAPIClient.fetchUsageResult = .success(makeUsageResponse(
+            fiveHourUtil: 100,
+            resetsAt: resetTime
+        ))
+
+        sut = createService()
+        await waitForRefresh()
+
+        sut.startAutoRefresh()
+        await waitForRefresh()
+
+        let countdownBefore = sut.secondsUntilNextRefresh
+        assertTrue(countdownBefore > 0, "Should have reset countdown before manual refresh")
+
+        // Manual refresh still at 100%
+        await sut.refreshNow()
+        await waitForRefresh()
+
+        let countdownAfter = sut.secondsUntilNextRefresh
+        assertTrue(countdownAfter > 0, "Should still have reset countdown after manual refresh")
+    }
+
+    func testResetCountdown_ClearedByStopAutoRefresh() async {
+        TestRunner.shared.startTest("stopAutoRefresh clears reset countdown")
+
+        mockAPIClient.fetchUsageResult = .success(makeUsageResponse(
+            fiveHourUtil: 100,
+            resetsAt: Date().addingTimeInterval(3600)
+        ))
+
+        sut = createService()
+        await waitForRefresh()
+
+        sut.startAutoRefresh()
+        await waitForRefresh()
+
+        assertTrue(sut.secondsUntilNextRefresh > 0, "Should have reset countdown")
+
+        sut.stopAutoRefresh()
+
+        assertEqual(sut.secondsUntilNextRefresh, 0, "Countdown should be 0 after stop")
+    }
+
+    func testResetCountdown_NonPrimaryExpiredTriggersRefresh() async {
+        TestRunner.shared.startTest("Non-primary item expired triggers refresh while paused")
+
+        // five_hour at 100% (resets in 4h), seven_day at 80% (already expired)
+        mockAPIClient.fetchUsageResult = .success(makeUsageResponse(
+            fiveHourUtil: 100,
+            fiveHourResetsAt: Date().addingTimeInterval(14400),
+            sevenDayUtil: 80,
+            sevenDayResetsAt: Date().addingTimeInterval(-10) // already past
+        ))
+
+        sut = createService()
+        await waitForRefresh()
+
+        let callCountBefore = mockAPIClient.fetchUsageCallCount
+
+        // startAutoRefresh → startResetCountdown → updateCountdown → checkForExpiredResetTimes
+        // seven_day's resetsAt is in the past, so it triggers refreshNow()
+        sut.startAutoRefresh()
+        await waitForRefresh()
+
+        assertGreaterThan(mockAPIClient.fetchUsageCallCount, callCountBefore,
+                          "Should trigger refresh when non-primary item expires")
+    }
+
+    func testResetCountdown_SleepWakeWhileAtLimit() async {
+        TestRunner.shared.startTest("Sleep/wake while at limit restores reset countdown")
+
+        mockAPIClient.fetchUsageResult = .success(makeUsageResponse(
+            fiveHourUtil: 100,
+            resetsAt: Date().addingTimeInterval(3600)
+        ))
+
+        sut = createService()
+        await waitForRefresh()
+
+        sut.startAutoRefresh()
+        await waitForRefresh()
+
+        assertTrue(sut.secondsUntilNextRefresh > 0, "Should have reset countdown before sleep")
+
+        // Sleep: stops all timers
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.willSleepNotification,
+            object: nil
+        )
+        await waitForRefresh()
+
+        assertEqual(sut.secondsUntilNextRefresh, 0, "Countdown should be 0 during sleep")
+
+        // Wake: refreshes and restarts (still at 100%)
+        NSWorkspace.shared.notificationCenter.post(
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
+        await waitForRefresh()
+
+        // Should have reset countdown again (not normal auto-refresh countdown)
+        assertTrue(sut.secondsUntilNextRefresh > 3500,
+                   "Should restore reset countdown (~1h), got \(sut.secondsUntilNextRefresh)")
     }
 
     func testResetDetection_UtilizationUpdates() async {
@@ -369,6 +515,26 @@ final class UsageRefreshServiceTests {
 
         await setUp()
         await testAutoRefresh_PausesWhenPrimaryAtLimit()
+        tearDown()
+
+        await setUp()
+        await testResetCountdown_ShowsCorrectSecondsUntilReset()
+        tearDown()
+
+        await setUp()
+        await testResetCountdown_ManualRefreshWhileAtLimit()
+        tearDown()
+
+        await setUp()
+        await testResetCountdown_ClearedByStopAutoRefresh()
+        tearDown()
+
+        await setUp()
+        await testResetCountdown_NonPrimaryExpiredTriggersRefresh()
+        tearDown()
+
+        await setUp()
+        await testResetCountdown_SleepWakeWhileAtLimit()
         tearDown()
 
         await setUp()
