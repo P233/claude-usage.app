@@ -37,10 +37,30 @@ A macOS menubar app that displays your Claude.ai usage statistics.
 
 > Only reads your own usage data. No conversations or personal info accessed.
 
+## OAuth Branch (Experimental)
+
+> **If you use [Claude Code](https://docs.anthropic.com/en/docs/claude-code), check out the [`oauth`](../../tree/oauth) branch for a zero-login experience.**
+
+The `oauth` branch replaces the WebView login with automatic OAuth credential detection from Claude Code CLI — no manual login required.
+
+### What's new
+
+- **Zero-interaction login** — auto-reads OAuth credentials from Claude Code's Keychain
+- **Automatic token refresh** — transparent token renewal via OAuth API
+- **Extra Usage display** — spending progress with amount, percentage, progress bar, and monthly reset date
+- **Simplified UI** — removed Disconnect button; added "Manage in Browser" link
+
+### What's removed or limited
+
+- **WebView login** — removed; requires Claude Code CLI installed and logged in
+- **Extra Usage toggle** — read-only status (enable/disable via claude.ai instead)
+- **Balance & auto-reload display** — not available through the OAuth API
+- **Keychain write access** — app no longer stores credentials (read-only from Claude Code)
+
 ## Build & Run
 
 ```bash
-git clone https://github.com/nicekate/claude-usage.git
+git clone git@github.com:P233/claude-usage.app.git
 cd claude-usage
 chmod +x build.sh
 ./build.sh
