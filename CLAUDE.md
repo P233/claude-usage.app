@@ -4,22 +4,22 @@
 
 A macOS menubar application that displays Claude.ai usage statistics in real-time. Built with Swift 5.9 and SwiftUI, targeting macOS 13.0+.
 
-**Tech Stack**: Swift async/await + Combine, SwiftUI + AppKit (NSStatusItem), Keychain + UserDefaults, URLSession, os.log. No external dependencies.
+**Tech Stack**: Swift async/await + Combine, SwiftUI + AppKit (NSStatusItem), OAuth + Keychain, URLSession, os.log. No external dependencies.
 
 ## Core Features
 
-### 1. Authentication
+### 1. Authentication (OAuth via Claude Code CLI)
 
-- **Login Flow**: Open WebView → load `claude.ai/login` → user logs in → extract session cookies
-- **Cookie Storage**: macOS Keychain with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`
-- **Bootstrap**: Call `/api/bootstrap` to get organization ID and subscription tier
-- **Session Management**: Detect 401/403 as session expiry, prompt re-login
-- **Cookie Validation**: Whitelist only `claude.ai` and `anthropic.com` domains
+- Reads OAuth credentials from Claude Code's macOS Keychain (`"Claude Code-credentials"` service)
+- Read-only: never writes to Claude Code's Keychain entry
+- Token refresh via `POST https://api.anthropic.com/v1/oauth/token` (transparent to user)
+- Refreshed tokens cached in-memory only (re-read from Keychain on next launch)
+- Session expiry (401/403): Clear cached auth, show "Not Connected" UI
 
 ### 2. Usage Data Fetching
 
-- **API Endpoint**: `GET /api/organizations/{id}/usage`
-- **Polling**: Auto-refresh at configurable intervals (1, 2, 3, 5, 10 minutes)
+- **API Endpoint**: `GET https://api.anthropic.com/api/oauth/usage` with Bearer token + `anthropic-beta` header
+- **Polling**: Auto-refresh at configurable intervals (1, 3, 5, 10 minutes)
 - **Dynamic Response Parsing**: API returns varying keys (`five_hour`, `seven_day`, `seven_day_opus`, etc.)
 - **Priority Ordering**: `five_hour` → `seven_day` → `seven_day_*` variants → others (alphabetically)
 - **Data Model**: Each item has `utilization` (0-100+) and `resetsAt` (ISO timestamp)
@@ -36,22 +36,22 @@ A macOS menubar application that displays Claude.ai usage statistics in real-tim
 - **Auto-Refresh Pause**: When primary reaches 100%, pause API polling
 - **Reset Detection**: When utilization drops to 0, play notification sound (if enabled)
 
-### 5. Extra Usage (Billing)
+### 5. Extra Usage
 
-- **Prepaid Credits**: `GET /api/organizations/{id}/prepaid/credits`
-- **Spend Limit**: `GET /api/organizations/{id}/overage_spend_limit`
-- **Toggle**: Enable/disable via `PUT`, "Manage in Browser" links to `claude.ai/settings/usage`
+- Comes inline in the OAuth usage response (`extra_usage` field)
+- Read-only display: enabled/disabled status, spending amount, progress bar
+- "Manage in Browser" link to `claude.ai/settings/usage`
 
 ### 6. Settings
 
-- Auto Refresh Interval, Reset Sound selector, Log Out, Quit
+- Auto Refresh Interval, Reset Sound selector, Disconnect, Quit
 
 ## Architecture
 
 **MVVM Pattern** with protocol-based services:
 
 ```
-Views (SwiftUI) → ViewModel (AppViewModel) → Services → API/Storage
+Views (SwiftUI) → ViewModel (AppViewModel) → Services → API
 ```
 
 ### Service Dependencies
@@ -59,9 +59,11 @@ Views (SwiftUI) → ViewModel (AppViewModel) → Services → API/Storage
 ```
 UserSettings.shared (singleton)
        ↓
-AuthenticationService (standalone, owns KeychainService)
+OAuthTokenService (reads Claude Code Keychain, refreshes tokens)
        ↓
-ClaudeAPIClient (depends on AuthenticationService for cookies)
+AuthenticationService (owns OAuthTokenService)
+       ↓
+ClaudeAPIClient (depends on AuthenticationServiceProtocol for tokens)
        ↓
 UsageRefreshService (depends on APIClient, AuthService, Settings)
        ↓
@@ -75,26 +77,20 @@ AppViewModel (coordinates all above, exposes @Published properties)
      App Launch ───▶│   unknown   │
                     └──────┬──────┘
                            │ checkStoredCredentials()
-                    ┌──────▼─────────┐
-                    │ authenticating │
-                    └──────┬─────────┘
-           ┌───────────────┼───────────────┐
-           ▼               ▼               ▼
-    ┌─────────────┐ ┌────────────────┐ ┌─────────────┐
-    │authenticated│ │notAuthenticated│ │    error    │
-    │(orgId, tier)│ │                │ │  (message)  │
-    └──────┬──────┘ └──────┬─────────┘ └──────┬──────┘
-           │               │                  │
-           │   logout()    │   login()        │  retry()
-           └───────────────┼──────────────────┘
-                           ▼
-                    (cycle repeats)
+           ┌───────────────┴───────────────┐
+           ▼                               ▼
+    ┌─────────────┐                ┌────────────────┐
+    │authenticated│                │notAuthenticated│
+    │   (tier)    │                │                │
+    └──────┬──────┘                └────────────────┘
+           │   logout()                    ▲
+           └───────────────────────────────┘
 ```
 
 ### Edge Cases & Error Handling
 
 - **Network Disconnected**: Skip API call, set `lastError`, retry on next timer tick
-- **Session Expired (401/403)**: Set `authState = .notAuthenticated`, prompt re-login
+- **Session Expired (401/403)**: Set `authState = .notAuthenticated`, show "Not Connected"
 - **API Errors**: Max 3 retries with exponential backoff (30s, 60s, 120s)
 - **Cache**: `cachedUsageSummary_v2` in UserDefaults, max age 1 hour, cleared on logout
 - **System Sleep/Wake**: Stop all timers on sleep (prevents Power Nap API calls/sounds); refresh + restart on wake
@@ -123,31 +119,45 @@ AppViewModel (coordinates all above, exposes @Published properties)
 ClaudeUsage/
 ├── ClaudeUsageApp.swift      # @main entry point
 ├── AppDelegate.swift         # Menubar management
-├── Models/                   # Data structures
-├── Services/                 # Business logic
-├── ViewModels/               # UI state (AppViewModel)
-├── Views/                    # SwiftUI components
-└── Utilities/                # Constants, helpers
+├── Models/
+│   ├── AuthState.swift       # AuthState enum
+│   ├── OAuthCredentials.swift # Claude Code Keychain JSON models
+│   ├── SubscriptionType.swift # Subscription tier parsing
+│   ├── UserSettings.swift    # User preferences
+│   └── UsageData.swift       # Usage response & display models
+├── Services/
+│   ├── AuthenticationService.swift  # OAuth authentication
+│   ├── ClaudeAPIClient.swift        # API client (OAuth)
+│   ├── NetworkMonitor.swift         # Network connectivity
+│   ├── OAuthTokenService.swift      # Claude Code Keychain reader + token refresh
+│   └── UsageRefreshService.swift    # Polling, reset detection, countdown
+├── ViewModels/
+│   └── AppViewModel.swift    # UI state coordination
+├── Views/
+│   ├── MenuBarView.swift     # Main popover view
+│   └── UsageCardView.swift   # Usage card components
+└── Utilities/
+    └── Constants.swift       # App constants
 
 ClaudeUsageTests/
-├── UsageRefreshServiceTests.swift  # Unit tests with lightweight test framework
+├── UsageRefreshServiceTests.swift  # Unit tests
 └── Mocks/                          # Mock services for testing
 ```
 
 ## API Endpoints
 
-All calls go to `claude.ai`:
+All calls go to `api.anthropic.com`:
 
-- `POST /api/bootstrap` - Organization & subscription info
-- `GET /api/organizations/{id}/usage` - Usage statistics
-- `GET /api/organizations/{id}/prepaid/credits` - Prepaid balance
-- `GET /api/organizations/{id}/overage_spend_limit` - Billing limits
+- `GET /api/oauth/usage` — Usage statistics (Bearer token + `anthropic-beta` header)
+- `GET /api/oauth/prepaid/credits` — Prepaid balance & auto-reload settings
+- `GET /api/oauth/overage_spend_limit` — Billing limits & spending details
+- `PUT /api/oauth/overage_spend_limit` — Toggle extra usage enabled/disabled
+- `POST /v1/oauth/token` — Token refresh (client_id + refresh_token)
 
 ## Security Requirements
 
-- Store credentials only in Keychain with `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`
-- Validate cookie domains (only `claude.ai`, `anthropic.com`)
-- Never log sensitive data (cookies, tokens)
+- Read-only access to Claude Code's Keychain (never write to it)
+- Never log sensitive data (tokens, access tokens)
 - Use HTTPS for all network requests
 
 ## Build & Test
@@ -164,6 +174,6 @@ All calls go to `claude.ai`:
 
 1. **No External Dependencies**: Keep the project pure Swift/SwiftUI
 2. **Menubar App**: Uses `LSUIElement` (no dock icon)
-3. **Cookie-Based Auth**: WebView login flow with manual cookie management
+3. **OAuth Only**: Authentication via Claude Code CLI credentials (requires Claude Code installed)
 4. **English UI**: User-facing strings are in English
 5. **Dynamic API Response**: Usage API returns varying keys; handle with `orderedKeys`

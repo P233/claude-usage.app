@@ -1,27 +1,9 @@
 import Foundation
-import WebKit
-import Combine
 import os.log
 
 private let logger = Logger(subsystem: Constants.App.bundleIdentifier, category: "AuthenticationService")
 
-// Thread-safe cookie storage
-final class CookieStorage: @unchecked Sendable {
-    private var cookies: [HTTPCookie]?
-    private let lock = NSLock()
-
-    func get() -> [HTTPCookie]? {
-        lock.lock()
-        defer { lock.unlock() }
-        return cookies
-    }
-
-    func set(_ newCookies: [HTTPCookie]?) {
-        lock.lock()
-        defer { lock.unlock() }
-        cookies = newCookies
-    }
-}
+// MARK: - Protocol
 
 @MainActor
 protocol AuthenticationServiceProtocol: AnyObject {
@@ -29,11 +11,12 @@ protocol AuthenticationServiceProtocol: AnyObject {
     var authStatePublisher: Published<AuthState>.Publisher { get }
 
     func checkStoredCredentials() async
-    func extractCookiesFromWebView(_ webView: WKWebView) async -> [HTTPCookie]
-    func saveSession(cookies: [HTTPCookie], organizationId: String, subscriptionType: SubscriptionType) async throws
-    nonisolated func getSessionCookies() -> [HTTPCookie]?
+    func getAccessToken() async throws -> String
+    func handleSessionExpired()
     func logout() async
 }
+
+// MARK: - Implementation
 
 @MainActor
 final class AuthenticationService: ObservableObject, AuthenticationServiceProtocol {
@@ -41,110 +24,119 @@ final class AuthenticationService: ObservableObject, AuthenticationServiceProtoc
     @Published private(set) var authState: AuthState = .unknown
     var authStatePublisher: Published<AuthState>.Publisher { $authState }
 
-    private let keychainService: KeychainServiceProtocol
-    private let cookieStorage = CookieStorage()
+    private let oauthTokenService: OAuthTokenServiceProtocol
 
-    // Known session cookie names used by Claude.ai
-    private static let sessionCookieNames: Set<String> = [
-        "sessionKey",
-        "__Secure-next-auth.session-token",
-        "lastActiveOrg"
-    ]
+    /// In-memory OAuth token cache (read from Claude Code's Keychain, never written back).
+    /// Refreshed tokens are only cached for this app's lifetime. On next launch, we re-read
+    /// from Claude Code's Keychain (which Claude Code itself keeps fresh). This means a
+    /// startup refresh network call is expected if the stored token has expired — acceptable
+    /// tradeoff to avoid writing to another app's Keychain entry.
+    private var cachedOAuthTokens: OAuthTokens?
+    private var cachedRefreshToken: String?
 
-    init(keychainService: KeychainServiceProtocol = KeychainService()) {
-        self.keychainService = keychainService
+    init(
+        oauthTokenService: OAuthTokenServiceProtocol = OAuthTokenService()
+    ) {
+        self.oauthTokenService = oauthTokenService
     }
+
+    // MARK: - Credential Check
 
     func checkStoredCredentials() async {
-        do {
-            guard let credentials = try keychainService.loadCredentials() else {
-                logger.info("No stored credentials found")
-                authState = .notAuthenticated
-                return
-            }
+        guard let credentials = oauthTokenService.loadClaudeCodeCredentials(),
+              let oauthTokens = credentials.claudeAiOauth else {
+            logger.info("No OAuth credentials found from Claude Code")
+            authState = .notAuthenticated
+            return
+        }
 
-            // Convert stored cookie data back to HTTPCookie objects
-            // and filter out expired cookies
-            let now = Date()
-            let cookies = credentials.cookies.compactMap { cookieData -> HTTPCookie? in
-                // Skip expired cookies
-                if let expiresDate = cookieData.expiresDate, expiresDate < now {
-                    logger.debug("Skipping expired cookie: \(cookieData.name)")
-                    return nil
-                }
-                return cookieData.toHTTPCookie()
-            }
+        let subType = SubscriptionType.from(oauthSubscriptionType: oauthTokens.subscriptionType)
+        let subscriptionType = subType.rawValue != nil
+            ? subType
+            : SubscriptionType.from(rateLimitTier: oauthTokens.rateLimitTier)
 
-            // Check if we have essential session cookies (not just any cookie with "session" in name)
-            let hasValidSessionCookie = cookies.contains { cookie in
-                Self.sessionCookieNames.contains(cookie.name)
-            }
+        cachedRefreshToken = oauthTokens.refreshToken
 
-            if hasValidSessionCookie && !cookies.isEmpty {
-                logger.info("Found valid session cookies, restoring session")
-                cookieStorage.set(cookies)
-                authState = .authenticated(
-                    organizationId: credentials.organizationId,
-                    subscriptionType: credentials.subscriptionType
+        if oauthTokens.isExpired {
+            do {
+                let refreshed = try await oauthTokenService.refreshAccessToken(refreshToken: oauthTokens.refreshToken)
+                let expiresIn = refreshed.expiresIn ?? {
+                    logger.warning("OAuth: server omitted expiresIn, defaulting to 3600s")
+                    return 3600
+                }()
+                cachedOAuthTokens = OAuthTokens(
+                    accessToken: refreshed.accessToken,
+                    refreshToken: oauthTokens.refreshToken,
+                    expiresAt: Int64((Date().timeIntervalSince1970 + Double(expiresIn)) * 1000),
+                    scopes: oauthTokens.scopes,
+                    subscriptionType: oauthTokens.subscriptionType,
+                    rateLimitTier: oauthTokens.rateLimitTier
                 )
-            } else {
-                // Cookies expired or invalid, clear and require re-login
-                logger.warning("No valid session cookies found, clearing credentials")
-                try? keychainService.deleteCredentials()
+                logger.info("OAuth: token refreshed successfully")
+                authState = .authenticated(subscriptionType: subscriptionType)
+            } catch {
+                logger.warning("OAuth: token refresh failed: \(error.localizedDescription)")
+                cachedOAuthTokens = nil
+                cachedRefreshToken = nil
                 authState = .notAuthenticated
             }
-
-        } catch {
-            logger.error("Failed to load credentials: \(error.localizedDescription)")
-            authState = .error("Failed to load credentials: \(error.localizedDescription)")
+        } else {
+            cachedOAuthTokens = oauthTokens
+            logger.info("OAuth: authenticated via Claude Code credentials")
+            authState = .authenticated(subscriptionType: subscriptionType)
         }
     }
 
-    func extractCookiesFromWebView(_ webView: WKWebView) async -> [HTTPCookie] {
-        return await withCheckedContinuation { continuation in
-            webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies in
-                let claudeCookies = cookies.filter { Self.isValidCookieDomain($0.domain) }
-                continuation.resume(returning: claudeCookies)
-            }
+    // MARK: - OAuth Access Token
+
+    /// Returns a valid access token, refreshing if needed.
+    func getAccessToken() async throws -> String {
+        guard let tokens = cachedOAuthTokens else {
+            throw ClaudeAPIClient.APIError.notAuthenticated
         }
-    }
 
-    private static func isValidCookieDomain(_ domain: String) -> Bool {
-        Constants.Domain.isValidCookieDomain(domain)
-    }
+        if !tokens.isExpired {
+            return tokens.accessToken
+        }
 
-    func saveSession(cookies: [HTTPCookie], organizationId: String, subscriptionType: SubscriptionType) async throws {
-        let cookieDataArray = cookies.map { StoredCredentials.CookieData(from: $0) }
+        // Token expired — try refresh
+        guard let refreshToken = cachedRefreshToken else {
+            throw ClaudeAPIClient.APIError.sessionExpired
+        }
 
-        let credentials = StoredCredentials(
-            cookies: cookieDataArray,
-            organizationId: organizationId,
-            subscriptionType: subscriptionType,
-            savedAt: Date()
+        let refreshed = try await oauthTokenService.refreshAccessToken(refreshToken: refreshToken)
+        let expiresIn = refreshed.expiresIn ?? {
+            logger.warning("OAuth: server omitted expiresIn, defaulting to 3600s")
+            return 3600
+        }()
+
+        cachedOAuthTokens = OAuthTokens(
+            accessToken: refreshed.accessToken,
+            refreshToken: refreshToken,
+            expiresAt: Int64((Date().timeIntervalSince1970 + Double(expiresIn)) * 1000),
+            scopes: tokens.scopes,
+            subscriptionType: tokens.subscriptionType,
+            rateLimitTier: tokens.rateLimitTier
         )
 
-        try keychainService.save(credentials: credentials)
-        cookieStorage.set(cookies)
-        authState = .authenticated(organizationId: organizationId, subscriptionType: subscriptionType)
-        logger.info("Session saved successfully")
+        logger.info("OAuth: access token refreshed on demand")
+        return refreshed.accessToken
     }
 
-    nonisolated func getSessionCookies() -> [HTTPCookie]? {
-        return cookieStorage.get()
-    }
+    // MARK: - Session Management
 
     func logout() async {
         logger.info("Logging out")
-        try? keychainService.deleteCredentials()
-        cookieStorage.set(nil)
+        cachedOAuthTokens = nil
+        cachedRefreshToken = nil
         authState = .notAuthenticated
     }
 
-    // Called when API returns 401 - session expired
+    /// Called when API returns 401/403 — session expired
     func handleSessionExpired() {
         logger.warning("Session expired, clearing credentials")
-        cookieStorage.set(nil)
-        try? keychainService.deleteCredentials()
+        cachedOAuthTokens = nil
+        cachedRefreshToken = nil
         authState = .notAuthenticated
     }
 }

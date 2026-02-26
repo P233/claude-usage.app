@@ -1,0 +1,44 @@
+import Foundation
+
+// MARK: - Claude Code Keychain Credentials
+
+/// Top-level JSON structure stored by Claude Code CLI in macOS Keychain.
+/// Service: "Claude Code-credentials", Account: current username.
+/// This app reads but never writes this Keychain entry.
+struct ClaudeCodeCredentials: Codable {
+    let claudeAiOauth: OAuthTokens?
+    let organizationUuid: String?
+}
+
+/// OAuth token data from Claude Code CLI.
+struct OAuthTokens: Codable {
+    let accessToken: String
+    let refreshToken: String
+    let expiresAt: Int64 // milliseconds since epoch
+    let scopes: [String]?
+    let subscriptionType: String? // e.g., "max", "pro"
+    let rateLimitTier: String? // e.g., "default_claude_max_5x"
+
+    /// Whether the access token has expired (with 60-second safety margin).
+    var isExpired: Bool {
+        Date().addingTimeInterval(60) >= expirationDate
+    }
+
+    /// The Date when the access token expires.
+    var expirationDate: Date {
+        Date(timeIntervalSince1970: Double(expiresAt) / 1000.0)
+    }
+}
+
+// MARK: - Token Refresh Response
+
+/// Response from POST /v1/oauth/token.
+struct OAuthTokenRefreshResponse: Codable {
+    let accessToken: String
+    let expiresIn: Int? // seconds until expiry
+
+    enum CodingKeys: String, CodingKey {
+        case accessToken = "access_token"
+        case expiresIn = "expires_in"
+    }
+}

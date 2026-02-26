@@ -14,7 +14,7 @@
 # Requirements:
 #   - macOS 13.0 (Ventura) or later
 #   - Xcode Command Line Tools (for swiftc compiler)
-#   - Apple Silicon Mac (arm64) - modify -target flag for Intel Macs
+#   - Apple Silicon or Intel Mac (architecture auto-detected)
 #
 # Output:
 #   - Creates build/ClaudeUsage.app bundle
@@ -53,20 +53,20 @@ mkdir -p "$BUILD_DIR"
 # ============================================================================
 
 SWIFT_FILES=$(find "$SOURCE_DIR" -name "*.swift" -type f)
+ARCH=$(uname -m)
 
-echo "📝 Compiling Swift files..."
+echo "📝 Compiling Swift files (arch: $ARCH)..."
 
 # Compile with swiftc
-# -target: Specifies arm64 architecture and minimum macOS version
+# -target: Specifies architecture and minimum macOS version (auto-detected)
 # -sdk: Uses the macOS SDK from Xcode
-# -framework: Links required frameworks (SwiftUI, WebKit, Security, etc.)
+# -framework: Links required frameworks (SwiftUI, Security, etc.)
 # -parse-as-library: Treats the code as a library (required for @main entry point)
 swiftc \
     -o "$BUILD_DIR/$APP_NAME" \
-    -target arm64-apple-macosx13.0 \
+    -target ${ARCH}-apple-macosx13.0 \
     -sdk $(xcrun --sdk macosx --show-sdk-path) \
     -framework SwiftUI \
-    -framework WebKit \
     -framework Security \
     -framework Combine \
     -framework AppKit \

@@ -35,16 +35,16 @@ SOURCE_FILES=$(find "$SOURCE_DIR" -name "*.swift" -type f ! -name "ClaudeUsageAp
 
 # Collect test files
 TEST_FILES=$(find "$TESTS_DIR" -name "*.swift" -type f)
+ARCH=$(uname -m)
 
-echo "📝 Compiling source files and tests..."
+echo "📝 Compiling source files and tests (arch: $ARCH)..."
 
 # Compile everything together
 swiftc \
     -o "$BUILD_DIR/tests/TestRunner" \
-    -target arm64-apple-macosx13.0 \
+    -target ${ARCH}-apple-macosx13.0 \
     -sdk $(xcrun --sdk macosx --show-sdk-path) \
     -framework SwiftUI \
-    -framework WebKit \
     -framework Security \
     -framework Combine \
     -framework AppKit \

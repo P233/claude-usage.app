@@ -33,8 +33,8 @@ struct UsageCardView: View {
                     Text(resetTime)
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
-                } else if let remaining = item.resetTimeRemaining {
-                    Text(remaining)
+                } else {
+                    Text(item.resetTimeRemaining ?? "Ready")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }

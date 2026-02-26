@@ -44,52 +44,30 @@ private enum DateFormatters {
 
 // MARK: - Currency Formatter
 
-/// Thread-safe currency formatter cache using os_unfair_lock for minimal overhead
+/// Currency formatter — creates a fresh NumberFormatter per call for thread safety.
+/// Only called from @MainActor views so performance impact is negligible.
 private enum CurrencyFormatters {
-    private static var formatters: [String: NumberFormatter] = [:]
-    private static var lock = os_unfair_lock()
-
-    static func formatter(for currencyCode: String) -> NumberFormatter {
-        let key = currencyCode.uppercased()
-
-        os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
-
-        if let cached = formatters[key] {
-            return cached
-        }
+    static func format(cents: Int, currency: String) -> String {
+        let amount = Double(cents) / 100.0
+        let key = currency.uppercased()
 
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency
         formatter.currencyCode = key
 
         switch key {
-        case "USD":
-            formatter.currencySymbol = "$"
-        case "EUR":
-            formatter.currencySymbol = "€"
-        case "GBP":
-            formatter.currencySymbol = "£"
+        case "USD": formatter.currencySymbol = "$"
+        case "EUR": formatter.currencySymbol = "€"
+        case "GBP": formatter.currencySymbol = "£"
         case "JPY":
             formatter.currencySymbol = "¥"
             formatter.maximumFractionDigits = 0
-        case "CNY":
-            formatter.currencySymbol = "¥"
-        case "CAD":
-            formatter.currencySymbol = "CA$"
-        case "AUD":
-            formatter.currencySymbol = "A$"
-        default:
-            formatter.currencySymbol = key
+        case "CNY": formatter.currencySymbol = "¥"
+        case "CAD": formatter.currencySymbol = "CA$"
+        case "AUD": formatter.currencySymbol = "A$"
+        default: formatter.currencySymbol = key
         }
 
-        formatters[key] = formatter
-        return formatter
-    }
-
-    static func format(cents: Int, currency: String) -> String {
-        let amount = Double(cents) / 100.0
-        let formatter = self.formatter(for: currency)
         return formatter.string(from: NSNumber(value: amount)) ?? "\(currency) \(amount)"
     }
 }
@@ -113,13 +91,50 @@ struct UsagePeriodResponse: Codable {
     }
 }
 
+/// Extra usage data embedded in OAuth usage response
+struct OAuthExtraUsage: Codable {
+    let isEnabled: Bool
+    let monthlyLimit: Int?
+    let usedCredits: Int?
+    let utilization: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case isEnabled = "is_enabled"
+        case monthlyLimit = "monthly_limit"
+        case usedCredits = "used_credits"
+        case utilization
+    }
+
+    /// Whether spending data is available (has limit values, regardless of enabled state)
+    var hasSpendingData: Bool {
+        guard let limit = monthlyLimit, limit > 0 else { return false }
+        return true
+    }
+
+    var usedPercentage: Int {
+        guard let used = usedCredits, let limit = monthlyLimit, limit > 0 else { return 0 }
+        return Int(Double(used) / Double(limit) * 100)
+    }
+
+    var formattedUsedCredits: String {
+        CurrencyFormatters.format(cents: usedCredits ?? 0, currency: "usd")
+    }
+
+    var formattedMonthlyLimit: String {
+        CurrencyFormatters.format(cents: monthlyLimit ?? 0, currency: "usd")
+    }
+}
+
 /// Dynamic usage response - parses any fields from the API
 struct UsageResponse {
     let items: [String: UsagePeriodResponse]
+    /// Extra usage data (present in OAuth responses)
+    let extraUsage: OAuthExtraUsage?
 
     /// Memberwise initializer (also used by tests)
-    init(items: [String: UsagePeriodResponse]) {
+    init(items: [String: UsagePeriodResponse], extraUsage: OAuthExtraUsage? = nil) {
         self.items = items
+        self.extraUsage = extraUsage
     }
 
     /// Ordered keys based on priority:
@@ -155,15 +170,23 @@ extension UsageResponse: Decodable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: DynamicCodingKey.self)
         var parsedItems: [String: UsagePeriodResponse] = [:]
+        var parsedExtraUsage: OAuthExtraUsage?
 
         for key in container.allKeys {
-            // Try to decode as UsagePeriodResponse, skip if null or invalid
-            if let period = try? container.decodeIfPresent(UsagePeriodResponse.self, forKey: key) {
+            if key.stringValue == "extra_usage" {
+                // Parse inline extra_usage from OAuth response
+                do {
+                    parsedExtraUsage = try container.decodeIfPresent(OAuthExtraUsage.self, forKey: key)
+                } catch {
+                    logger.error("Failed to decode extra_usage: \(error)")
+                }
+            } else if let period = try? container.decodeIfPresent(UsagePeriodResponse.self, forKey: key) {
                 parsedItems[key.stringValue] = period
             }
         }
 
         self.items = parsedItems
+        self.extraUsage = parsedExtraUsage
     }
 
     private struct DynamicCodingKey: CodingKey {
@@ -201,11 +224,6 @@ struct UsageItem: Identifiable {
     }
 
     /// Display title for the usage item
-    /// - "five_hour" → "5-Hour Usage"
-    /// - "seven_day" → "7-Day Usage"
-    /// - "seven_day_opus" → "7-Day Opus"
-    /// - "seven_day_oauth_apps" → "7-Day Oauth Apps"
-    /// - others → capitalize and replace underscores
     var displayTitle: String {
         switch key {
         case "five_hour":
@@ -220,7 +238,6 @@ struct UsageItem: Identifiable {
                     .joined(separator: " ")
                 return "7-Day \(formatted)"
             }
-            // Generic: replace underscores, capitalize
             return key.split(separator: "_")
                 .map { $0.capitalized }
                 .joined(separator: " ")
@@ -277,8 +294,6 @@ struct UsageItem: Identifiable {
         ResetTimeFormatter.parse(resetsAt)
     }
 
-    /// Reset time display for short intervals (5-hour style)
-    /// e.g., "14:30 · in 2h 30m"
     var resetTimeDisplay: String? {
         switch resetTimeResult {
         case .none: return nil
@@ -287,7 +302,6 @@ struct UsageItem: Identifiable {
         }
     }
 
-    /// Short reset time for menubar display (e.g., "14:30")
     var resetTimeShort: String? {
         switch resetTimeResult {
         case .none: return nil
@@ -296,7 +310,6 @@ struct UsageItem: Identifiable {
         }
     }
 
-    /// Compact remaining time in English (e.g., "2h 30m", "3d 5h", "Ready")
     var resetTimeRemaining: String? {
         switch resetTimeResult {
         case .none: return ResetTimeFormatter.readyText
@@ -305,8 +318,6 @@ struct UsageItem: Identifiable {
         }
     }
 
-    /// Static reset target for at-limit display (e.g., "until 14:30", "until Tmr 14:30")
-    /// Unlike `resetTimeRemaining`, this value doesn't change over time.
     var resetTimeTarget: String? {
         switch resetTimeResult {
         case .none: return nil
@@ -315,8 +326,6 @@ struct UsageItem: Identifiable {
         }
     }
 
-    /// Reset time display for longer intervals (7-day style)
-    /// e.g., "Jan 5 · in 3d 5h" or "14:30 · in 2h 30m" (if today)
     var resetTimeDisplayLong: String? {
         switch resetTimeResult {
         case .none: return nil
@@ -324,12 +333,10 @@ struct UsageItem: Identifiable {
         case .valid(let tc): return ResetTimeFormatter.longDisplay(for: tc)
         }
     }
-
 }
 
 // MARK: - Reset Time Formatting
 
-/// Handles all reset time formatting logic for UsageItem
 private enum ResetTimeFormatter {
     static let updatingText = "Updating..."
     static let readyText = "Ready"
@@ -346,18 +353,15 @@ private enum ResetTimeFormatter {
                 + minutes * Constants.Time.secondsPerMinute
         }
 
-        /// Formatted remaining time (e.g., "2h 30m")
         var remainingFormatted: String? {
             let interval = TimeInterval(max(60, totalSeconds))
             return DateFormatters.remainingTime.string(from: interval)
         }
 
-        /// Formatted remaining time with "in" prefix (e.g., "in 2h 30m")
         var remainingWithPrefix: String {
             if let formatted = remainingFormatted {
                 return "in \(formatted)"
             }
-            // Fallback (should not happen)
             return hours > 0 ? "in \(hours)h \(minutes)m" : "in \(minutes)m"
         }
     }
@@ -368,7 +372,6 @@ private enum ResetTimeFormatter {
         case valid(TimeComponents)
     }
 
-    /// Parse resetsAt date into TimeComponents
     static func parse(_ resetsAt: Date?) -> Result {
         guard let resetsAt = resetsAt else { return .none }
         let interval = resetsAt.timeIntervalSince(Date())
@@ -383,14 +386,12 @@ private enum ResetTimeFormatter {
         ))
     }
 
-    /// Round date to nearest minute
     static func roundToNearestMinute(_ date: Date) -> Date {
         let seconds = Calendar.current.component(.second, from: date)
         let adjustment = seconds >= 30 ? (60 - seconds) : -seconds
         return date.addingTimeInterval(TimeInterval(adjustment))
     }
 
-    /// Format reset time with relative prefix (e.g., "14:30", "Tmr 14:30", "2/1 14:30")
     static func formatResetTime(_ date: Date) -> String {
         let rounded = roundToNearestMinute(date)
         let calendar = Calendar.current
@@ -403,17 +404,14 @@ private enum ResetTimeFormatter {
         }
     }
 
-    /// Short display: "14:30 · in 2h 30m"
     static func shortDisplay(for tc: TimeComponents) -> String {
         let timeStr = formatResetTime(tc.date)
         return "\(timeStr) · \(tc.remainingWithPrefix)"
     }
 
-    /// Long display: "Jan 5 · in 3d 5h" or "14:30 · in 2h 30m" (if today)
     static func longDisplay(for tc: TimeComponents) -> String {
         let rounded = roundToNearestMinute(tc.date)
         guard let remaining = tc.remainingFormatted else {
-            // Fallback: just show the date/time without remaining
             return Calendar.current.isDateInToday(rounded)
                 ? DateFormatters.timeOnly.string(from: rounded)
                 : DateFormatters.monthDay.string(from: rounded)
@@ -428,12 +426,10 @@ private enum ResetTimeFormatter {
         }
     }
 
-    /// Compact remaining only: "2h 30m"
     static func compactRemaining(for tc: TimeComponents) -> String? {
         tc.remainingFormatted
     }
 
-    /// Time only: "14:30"
     static func timeOnly(for tc: TimeComponents) -> String {
         DateFormatters.timeOnly.string(from: roundToNearestMinute(tc.date))
     }
@@ -445,7 +441,6 @@ enum UsageStatusLevel {
     case warning   // 80-99%
     case critical  // >= 100%
 
-    /// Create status level from percentage value
     static func from(percentage: Int) -> UsageStatusLevel {
         if percentage >= 100 { return .critical }
         if percentage >= 80 { return .warning }
@@ -458,17 +453,14 @@ struct UsageSummary {
     let items: [UsageItem]
     let lastUpdated: Date
 
-    /// Primary usage item (five_hour if available, otherwise first item)
     var primaryItem: UsageItem? {
         items.first { $0.key == "five_hour" } ?? items.first
     }
 
-    /// Whether primary item is at limit (for auto-refresh pause)
     var isPrimaryAtLimit: Bool {
         primaryItem?.isAtLimit ?? false
     }
 
-    /// Primary item's reset time (for scheduling resume)
     var primaryResetsAt: Date? {
         primaryItem?.resetsAt
     }
@@ -540,6 +532,9 @@ struct ExtraUsageSummary {
     let credits: PrepaidCredits?
     let spendLimit: OverageSpendLimit?
 
+    /// Whether detailed API data is available (vs inline fallback)
+    var hasDetailedData: Bool { credits != nil }
+
     var formattedBalance: String? {
         guard let credits = credits else { return nil }
         return CurrencyFormatters.format(cents: credits.amount, currency: credits.currency)
@@ -552,32 +547,10 @@ struct ExtraUsageSummary {
 
 // MARK: - Billing Request/Response Models
 
-struct SetupOverageBillingRequest: Codable {
-    let seatTierMonthlySpendLimits: SeatTierLimits
-    let orgMonthlySpendLimit: Int
+struct UpdateOverageSpendLimitRequest: Codable {
+    let isEnabled: Bool
 
     enum CodingKeys: String, CodingKey {
-        case seatTierMonthlySpendLimits = "seat_tier_monthly_spend_limits"
-        case orgMonthlySpendLimit = "org_monthly_spend_limit"
-    }
-}
-
-struct SeatTierLimits: Codable {
-    let teamStandard: Int?
-    let teamTier1: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case teamStandard = "team_standard"
-        case teamTier1 = "team_tier_1"
-    }
-}
-
-struct SetupOverageBillingResponse: Codable {
-    let customerWasCreated: Bool
-    let contractWasCreated: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case customerWasCreated = "customer_was_created"
-        case contractWasCreated = "contract_was_created"
+        case isEnabled = "is_enabled"
     }
 }

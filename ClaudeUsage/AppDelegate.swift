@@ -9,7 +9,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
-    private var loginWindow: NSWindow?
     private var eventMonitor: Any?
     private var cancellables = Set<AnyCancellable>()
 
@@ -62,7 +61,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     private func observeViewModelChanges() {
-        // Combine multiple publishers to reduce redundant updates
         Publishers.CombineLatest3(
             viewModel.$usageSummary,
             viewModel.$authState,
@@ -73,10 +71,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
         .store(in: &cancellables)
 
-        // Throttled observation of countdown changes for status bar sizing.
-        // During normal auto-refresh the countdown updates every 1s (too frequent for sizing),
-        // so throttle to at most once per 30s. During reset countdown (100%) the timer fires
-        // every 60s, so every change passes through.
         viewModel.$secondsUntilNextRefresh
             .removeDuplicates()
             .throttle(for: .seconds(30), scheduler: RunLoop.main, latest: true)
@@ -93,9 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         let contentView = StatusBarContentView(viewModel: viewModel)
 
-        // Reuse existing hosting view or create new one
         if let hostingView = statusBarHostingView {
-            // Update rootView instead of recreating (prevents memory leak)
             hostingView.rootView = contentView
         } else {
             let hostingView = NSHostingView(rootView: contentView)
@@ -105,7 +97,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         guard let hostingView = statusBarHostingView else { return }
 
-        // Calculate and apply size
         let fittingSize = hostingView.fittingSize
         let width = max(Constants.UI.statusBarMinWidth, fittingSize.width + Constants.UI.statusBarPadding)
         let height = Constants.UI.statusBarHeight
@@ -130,42 +121,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
 
-    // MARK: - Login Window
-
-    func openLoginWindow() {
-        // Close popover if open
-        popover?.performClose(nil)
-
-        // If window already exists and is visible, just bring to front
-        if let window = loginWindow, window.isVisible {
-            window.makeKeyAndOrderFront(nil)
-            NSApplication.shared.activate(ignoringOtherApps: true)
-            return
-        }
-
-        // Create login window
-        let loginView = LoginWindow().environmentObject(viewModel)
-        let hostingController = NSHostingController(rootView: loginView)
-
-        let window = NSWindow(contentViewController: hostingController)
-        window.title = "Login to Claude"
-        window.styleMask = [.titled, .closable]
-        window.setContentSize(NSSize(width: 420, height: 600))
-        window.center()
-        window.isReleasedWhenClosed = false
-
-        loginWindow = window
-        window.makeKeyAndOrderFront(nil)
-        NSApplication.shared.activate(ignoringOtherApps: true)
-    }
-
-    func closeLoginWindow() {
-        loginWindow?.close()
-    }
-
-    deinit {
+    func applicationWillTerminate(_ notification: Notification) {
         if let eventMonitor = eventMonitor {
             NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
         }
     }
 }
@@ -187,7 +146,6 @@ struct StatusBarContentView: View {
             if viewModel.authState.isAuthenticated {
                 if let summary = viewModel.usageSummary, let primary = summary.primaryItem {
                     VStack(alignment: .leading, spacing: -3) {
-                        // Percentage with status indicator
                         HStack(alignment: .center, spacing: 3) {
                             Text("\(primary.utilization)%")
                                 .font(.system(size: 9, weight: .semibold, design: .rounded))
@@ -198,7 +156,6 @@ struct StatusBarContentView: View {
                                 .frame(width: 6, height: 6)
                         }
 
-                        // Show remaining time, fallback to "5h" when resetting
                         Text(primary.resetTimeRemaining ?? Self.defaultRemaining)
                             .font(.system(size: 8, weight: .regular, design: .rounded))
                             .opacity(0.8)

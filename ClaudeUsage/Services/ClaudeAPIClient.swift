@@ -4,13 +4,10 @@ import os.log
 private let logger = Logger(subsystem: Constants.App.bundleIdentifier, category: "ClaudeAPIClient")
 
 protocol ClaudeAPIClientProtocol {
-    func fetchBootstrap() async throws -> BootstrapResponse
-    func fetchBootstrap(withCookies cookies: [HTTPCookie]) async throws -> BootstrapResponse
-    func fetchUsage(organizationId: String) async throws -> UsageResponse
-    func updateExtraUsage(organizationId: String, enabled: Bool) async throws
-    func fetchPrepaidCredits(organizationId: String) async throws -> PrepaidCredits
-    func fetchOverageSpendLimit(organizationId: String) async throws -> OverageSpendLimit
-    func setupOverageBilling(organizationId: String, monthlyLimit: Int) async throws -> SetupOverageBillingResponse
+    func fetchUsage() async throws -> UsageResponse
+    func fetchPrepaidCredits() async throws -> PrepaidCredits
+    func fetchOverageSpendLimit() async throws -> OverageSpendLimit
+    func updateExtraUsage(enabled: Bool) async throws
 }
 
 final class ClaudeAPIClient: ClaudeAPIClientProtocol {
@@ -53,76 +50,30 @@ final class ClaudeAPIClient: ClaudeAPIClientProtocol {
         }
     }
 
-    private let baseURL: URL
-    private weak var authService: AuthenticationService?
+    private let authService: AuthenticationServiceProtocol
     private let session: URLSession
+    private let decoder = JSONDecoder()
 
-    init(authService: AuthenticationService, baseURL: URL = Constants.API.baseURL) {
+    init(authService: AuthenticationServiceProtocol) {
         self.authService = authService
-        self.baseURL = baseURL
 
         let config = URLSessionConfiguration.default
-        // Disable automatic cookie handling since we manage cookies manually via headers
-        config.httpCookieAcceptPolicy = .never
-        config.httpShouldSetCookies = false
-        config.httpCookieStorage = nil
         config.timeoutIntervalForRequest = Constants.API.requestTimeout
-
         self.session = URLSession(configuration: config)
     }
 
     // MARK: - Request Building
 
-    /// Configure common headers for all API requests
-    private func configureHeaders(for request: inout URLRequest, cookies: [HTTPCookie]) {
-        // Set cookies in header
-        let cookieHeader = HTTPCookie.requestHeaderFields(with: cookies)
-        for (key, value) in cookieHeader {
-            request.setValue(value, forHTTPHeaderField: key)
-        }
+    private func makeOAuthRequest(for endpoint: String, method: String = "GET") async throws -> URLRequest {
+        let accessToken = try await authService.getAccessToken()
 
-        // Required headers to mimic browser
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue(Constants.API.origin, forHTTPHeaderField: "Origin")
-        request.setValue(Constants.API.referer, forHTTPHeaderField: "Referer")
-        request.setValue(Constants.API.userAgent, forHTTPHeaderField: "User-Agent")
-    }
-
-    /// Get session cookies or throw if not authenticated
-    private func getRequiredCookies() throws -> [HTTPCookie] {
-        guard let cookies = authService?.getSessionCookies(), !cookies.isEmpty else {
-            throw APIError.notAuthenticated
-        }
-        return cookies
-    }
-
-    private func makeRequest(for endpoint: String, method: String = "GET") throws -> URLRequest {
-        let cookies = try getRequiredCookies()
-        return makeRequest(for: endpoint, method: method, cookies: cookies)
-    }
-
-    private func makeRequest(for endpoint: String, method: String = "GET", cookies: [HTTPCookie]) -> URLRequest {
-        let url = baseURL.appendingPathComponent(endpoint)
+        let url = Constants.OAuth.apiBaseURL.appendingPathComponent(endpoint)
         var request = URLRequest(url: url)
         request.httpMethod = method
-        configureHeaders(for: &request, cookies: cookies)
-        return request
-    }
-
-    private func makeBootstrapRequest() throws -> URLRequest {
-        let cookies = try getRequiredCookies()
-        return makeBootstrapRequest(cookies: cookies)
-    }
-
-    private func makeBootstrapRequest(cookies: [HTTPCookie]) -> URLRequest {
-        // Bootstrap endpoint uses query parameter for statsig hashing algorithm
-        var components = URLComponents(url: baseURL.appendingPathComponent("bootstrap"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "statsig_hashing_algorithm", value: "djb2")]
-
-        var request = URLRequest(url: components.url!)
-        request.httpMethod = "GET"
-        configureHeaders(for: &request, cookies: cookies)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(Constants.OAuth.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(Constants.OAuth.betaHeader, forHTTPHeaderField: "anthropic-beta")
         return request
     }
 
@@ -137,7 +88,7 @@ final class ClaudeAPIClient: ClaudeAPIClientProtocol {
         if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
             logger.warning("Session expired (HTTP \(httpResponse.statusCode))")
             await MainActor.run {
-                authService?.handleSessionExpired()
+                authService.handleSessionExpired()
             }
             throw APIError.sessionExpired
         }
@@ -155,7 +106,6 @@ final class ClaudeAPIClient: ClaudeAPIClientProtocol {
             let (data, response) = try await session.data(for: request)
             try await handleResponse(response)
 
-            let decoder = JSONDecoder()
             return try decoder.decode(T.self, from: data)
 
         } catch let error as APIError {
@@ -185,50 +135,25 @@ final class ClaudeAPIClient: ClaudeAPIClientProtocol {
 
     // MARK: - API Methods
 
-    func fetchBootstrap() async throws -> BootstrapResponse {
-        let request = try makeBootstrapRequest()
+    func fetchUsage() async throws -> UsageResponse {
+        let request = try await makeOAuthRequest(for: "usage")
         return try await performRequest(request)
     }
 
-    func fetchBootstrap(withCookies cookies: [HTTPCookie]) async throws -> BootstrapResponse {
-        let request = makeBootstrapRequest(cookies: cookies)
+    func fetchPrepaidCredits() async throws -> PrepaidCredits {
+        let request = try await makeOAuthRequest(for: "prepaid/credits")
         return try await performRequest(request)
     }
 
-    func fetchUsage(organizationId: String) async throws -> UsageResponse {
-        let request = try makeRequest(for: "organizations/\(organizationId)/usage")
+    func fetchOverageSpendLimit() async throws -> OverageSpendLimit {
+        let request = try await makeOAuthRequest(for: "overage_spend_limit")
         return try await performRequest(request)
     }
 
-    func updateExtraUsage(organizationId: String, enabled: Bool) async throws {
-        var request = try makeRequest(for: "organizations/\(organizationId)/overage_spend_limit", method: "PUT")
-
-        let body = UpdateOverageSpendLimitRequest(isEnabled: enabled)
-        request.httpBody = try JSONEncoder().encode(body)
-
+    func updateExtraUsage(enabled: Bool) async throws {
+        var request = try await makeOAuthRequest(for: "overage_spend_limit", method: "PUT")
+        request.httpBody = try JSONEncoder().encode(UpdateOverageSpendLimitRequest(isEnabled: enabled))
         try await performRequestWithoutResponse(request)
         logger.info("Extra usage updated: \(enabled)")
-    }
-
-    func fetchPrepaidCredits(organizationId: String) async throws -> PrepaidCredits {
-        let request = try makeRequest(for: "organizations/\(organizationId)/prepaid/credits")
-        return try await performRequest(request)
-    }
-
-    func fetchOverageSpendLimit(organizationId: String) async throws -> OverageSpendLimit {
-        let request = try makeRequest(for: "organizations/\(organizationId)/overage_spend_limit")
-        return try await performRequest(request)
-    }
-
-    func setupOverageBilling(organizationId: String, monthlyLimit: Int) async throws -> SetupOverageBillingResponse {
-        var request = try makeRequest(for: "organizations/\(organizationId)/setup_overage_billing", method: "POST")
-
-        let body = SetupOverageBillingRequest(
-            seatTierMonthlySpendLimits: SeatTierLimits(teamStandard: nil, teamTier1: nil),
-            orgMonthlySpendLimit: monthlyLimit
-        )
-        request.httpBody = try JSONEncoder().encode(body)
-
-        return try await performRequest(request)
     }
 }

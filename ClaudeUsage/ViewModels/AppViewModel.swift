@@ -19,9 +19,9 @@ final class AppViewModel: ObservableObject {
 
     // MARK: - Services
 
-    let authService: AuthenticationService
+    let authService: AuthenticationServiceProtocol
     let apiClient: ClaudeAPIClientProtocol
-    let refreshService: UsageRefreshService
+    let refreshService: UsageRefreshServiceProtocol
     var settings: UserSettings
 
     private var cancellables = Set<AnyCancellable>()
@@ -72,9 +72,9 @@ final class AppViewModel: ObservableObject {
     }
 
     init(
-        authService: AuthenticationService,
+        authService: AuthenticationServiceProtocol,
         apiClient: ClaudeAPIClientProtocol,
-        refreshService: UsageRefreshService,
+        refreshService: UsageRefreshServiceProtocol,
         settings: UserSettings
     ) {
         self.authService = authService
@@ -96,12 +96,12 @@ final class AppViewModel: ObservableObject {
     }
 
     private func setupBindings() {
-        authService.$authState.assign(to: &$authState)
-        refreshService.$usageSummary.assign(to: &$usageSummary)
-        refreshService.$extraUsage.assign(to: &$extraUsage)
-        refreshService.$isRefreshing.assign(to: &$isRefreshing)
-        refreshService.$lastError.assign(to: &$lastError)
-        refreshService.$secondsUntilNextRefresh.assign(to: &$secondsUntilNextRefresh)
+        authService.authStatePublisher.assign(to: &$authState)
+        refreshService.usageSummaryPublisher.assign(to: &$usageSummary)
+        refreshService.extraUsagePublisher.assign(to: &$extraUsage)
+        refreshService.isRefreshingPublisher.assign(to: &$isRefreshing)
+        refreshService.lastErrorPublisher.assign(to: &$lastError)
+        refreshService.secondsUntilNextRefreshPublisher.assign(to: &$secondsUntilNextRefresh)
     }
 
     // MARK: - Actions
@@ -115,55 +115,14 @@ final class AppViewModel: ObservableObject {
         await refreshService.refreshNow()
     }
 
-    func onLoginSuccess(cookies: [HTTPCookie]) async {
-        lastError = nil
-        logger.info("onLoginSuccess called with \(cookies.count) cookies")
-
-        do {
-            logger.info("Fetching bootstrap...")
-            let bootstrap = try await apiClient.fetchBootstrap(withCookies: cookies)
-            logger.info("Bootstrap fetched, hasValidAccount: \(bootstrap.hasValidAccount)")
-
-            guard bootstrap.hasValidAccount, let organizationId = bootstrap.organizationId else {
-                logger.error("No organization found in bootstrap response")
-                lastError = "No organization found"
-                authState = .error("No organization found")
-                return
-            }
-
-            let subscriptionType = bootstrap.subscriptionType
-            logger.info("Saving session...")
-
-            try await authService.saveSession(
-                cookies: cookies,
-                organizationId: organizationId,
-                subscriptionType: subscriptionType
-            )
-
-            // Immediately update local authState to avoid Combine async delay
-            authState = .authenticated(organizationId: organizationId, subscriptionType: subscriptionType)
-
-            logger.info("Login successful")
-        } catch {
-            logger.error("Failed to process login: \(error.localizedDescription)")
-            lastError = error.localizedDescription
-            authState = .error(error.localizedDescription)
-        }
+    func toggleExtraUsage(enabled: Bool) async throws {
+        logger.info("Toggling extra usage to: \(enabled)")
+        try await apiClient.updateExtraUsage(enabled: enabled)
+        await refreshService.refreshNow()
     }
 
     func quit() {
         logger.info("App quitting")
         NSApplication.shared.terminate(nil)
-    }
-
-    func toggleExtraUsage(enabled: Bool) async throws {
-        guard let orgId = authState.organizationId else {
-            logger.warning("Attempted to toggle extra usage while not authenticated")
-            return
-        }
-
-        logger.info("Toggling extra usage to: \(enabled)")
-        try await apiClient.updateExtraUsage(organizationId: orgId, enabled: enabled)
-        await refreshService.refreshNow()
     }
 }

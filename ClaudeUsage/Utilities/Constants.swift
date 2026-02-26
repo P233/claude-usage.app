@@ -7,36 +7,17 @@ enum Constants {
     }
 
     enum API {
-        static let baseURL = URL(string: "https://claude.ai/api")!
-        static let loginURL = URL(string: "https://claude.ai/login")!
-        static let origin = "https://claude.ai"
-        static let referer = "https://claude.ai/"
-        static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
         static let requestTimeout: TimeInterval = 30
     }
 
-    enum Keychain {
-        static let serviceName = "com.claudeusage.app"
-        static let accountName = "session-credentials"
-    }
-
     enum Refresh {
-        static let intervalSeconds: TimeInterval = 5 * 60 // 5 minutes
         static let retryDelaySeconds: TimeInterval = 30
         /// Additional delay after reset time before refreshing (seconds)
         static let resumeDelaySeconds: TimeInterval = 5
     }
 
-    enum Login {
-        /// Delay to wait for cookies to sync after login detection
-        static let cookieSyncDelay: TimeInterval = 2.0
-    }
-
     enum UI {
         static let menuBarWidth: CGFloat = 300
-        static let loginWindowWidth: CGFloat = 480
-        static let loginWindowHeight: CGFloat = 640
-        static let loginWindowTitle = "Log in to Claude"
 
         // Status bar dimensions
         static let statusBarMinWidth: CGFloat = 45
@@ -85,20 +66,12 @@ enum Constants {
         static let secondsPerDay = 86400
     }
 
-    enum Domain {
-        /// Valid domains for Claude authentication cookies
-        private static let validDomains: Set<String> = ["claude.ai", "anthropic.com"]
-
-        /// Validates that a cookie domain belongs to Claude/Anthropic
-        /// Accepts: "claude.ai", ".claude.ai", "*.claude.ai", "anthropic.com", ".anthropic.com", "*.anthropic.com"
-        /// Rejects: "not-claude.ai", "claude.ai.evil.com"
-        static func isValidCookieDomain(_ domain: String) -> Bool {
-            let lowercased = domain.lowercased()
-            let normalized = lowercased.hasPrefix(".") ? String(lowercased.dropFirst()) : lowercased
-
-            return validDomains.contains { validDomain in
-                normalized == validDomain || normalized.hasSuffix(".\(validDomain)")
-            }
-        }
+    enum OAuth {
+        static let apiBaseURL = URL(string: "https://api.anthropic.com/api/oauth")!
+        static let tokenEndpoint = URL(string: "https://api.anthropic.com/v1/oauth/token")!
+        static let clientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+        static let claudeCodeKeychainService = "Claude Code-credentials"
+        static let userAgent = "claude-code/2.1.5"
+        static let betaHeader = "oauth-2025-04-20"
     }
 }

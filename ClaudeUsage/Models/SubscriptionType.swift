@@ -35,13 +35,23 @@ struct SubscriptionType: Equatable, Codable {
         return SubscriptionType(rawValue: capabilities.first)
     }
 
+    /// Create from Claude Code's OAuth subscriptionType format (e.g., "max" → "claude_max")
+    static func from(oauthSubscriptionType: String?) -> SubscriptionType {
+        guard let subType = oauthSubscriptionType else {
+            return SubscriptionType(rawValue: nil)
+        }
+        let normalized = subType.lowercased().hasPrefix("claude_") ? subType : "claude_\(subType)"
+        return SubscriptionType(rawValue: normalized.lowercased())
+    }
+
     /// Legacy migration: infer from old rateLimitTier format
     static func from(rateLimitTier: String?) -> SubscriptionType {
         guard let tier = rateLimitTier else {
             return SubscriptionType(rawValue: nil)
         }
-        // Old format stored without "claude_" prefix, normalize it
-        let normalized = tier.lowercased().hasPrefix("claude_") ? tier : "claude_\(tier)"
-        return SubscriptionType(rawValue: normalized.lowercased())
+        let lowered = tier.lowercased()
+        // Check if "claude_" appears anywhere (e.g., "default_claude_max_5x")
+        let normalized = lowered.contains("claude_") ? lowered : "claude_\(lowered)"
+        return SubscriptionType(rawValue: normalized)
     }
 }

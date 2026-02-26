@@ -3,22 +3,20 @@ import SwiftUI
 // MARK: - Layout Helpers
 
 private enum LayoutHelper {
-    static let primaryItemKeys: Set<String> = ["five_hour", "seven_day"]
-
-    /// Split items into primary and others, with pre-computed grid rows for others
-    static func layoutItems(_ items: [UsageItem]) -> (primary: [UsageItem], gridRows: [[UsageItem]]) {
+    /// Split items into primary (full-width) and others (compact grid).
+    /// Primary key is derived from `UsageSummary.primaryItem` to avoid divergence.
+    static func layoutItems(_ items: [UsageItem], primaryKey: String?) -> (primary: [UsageItem], gridRows: [[UsageItem]]) {
         var primary: [UsageItem] = []
         var others: [UsageItem] = []
 
         for item in items {
-            if primaryItemKeys.contains(item.key) {
+            if item.key == primaryKey {
                 primary.append(item)
             } else {
                 others.append(item)
             }
         }
 
-        // Pre-compute grid rows (2 items per row)
         let gridRows = stride(from: 0, to: others.count, by: 2).map { index in
             Array(others[index..<min(index + 2, others.count)])
         }
@@ -114,10 +112,6 @@ struct MenuBarView: View {
             authenticatedView
         case .notAuthenticated, .unknown:
             notAuthenticatedView
-        case .authenticating:
-            authenticatingView
-        case .error(let message):
-            errorView(message: message)
         }
     }
 
@@ -147,7 +141,7 @@ struct MenuBarView: View {
                 lastUpdatedView
             }
 
-            // Usage cards - dynamically render all items
+            // Usage cards
             usageCardsView
 
             // Extra Usage section
@@ -173,14 +167,12 @@ struct MenuBarView: View {
         if let summary = viewModel.usageSummary {
             if summary.items.isEmpty {
                 placeholderCard(title: "No Usage Data")
-            } else if summary.items.count <= Constants.UI.compactLayoutThreshold {
-                // Normal layout: all items as full-width cards
+            } else if summary.items.count < Constants.UI.compactLayoutThreshold {
                 ForEach(summary.items) { item in
                     UsageCardView(item: item)
                 }
             } else {
-                // Compact layout: primary items as cards, others as 2-column grid
-                let layout = LayoutHelper.layoutItems(summary.items)
+                let layout = LayoutHelper.layoutItems(summary.items, primaryKey: summary.primaryItem?.key)
 
                 ForEach(layout.primary) { item in
                     UsageCardView(item: item)
@@ -193,7 +185,6 @@ struct MenuBarView: View {
         }
     }
 
-    /// 2-column grid for compact display (pre-computed rows)
     @ViewBuilder
     private func compactGridView(rows: [[UsageItem]]) -> some View {
         ForEach(rows.indices, id: \.self) { rowIndex in
@@ -202,7 +193,6 @@ struct MenuBarView: View {
                 ForEach(row) { item in
                     UsageCardCompactView(item: item)
                 }
-                // Fill remaining space if odd number of items
                 if row.count == 1 {
                     Color.clear.frame(maxWidth: .infinity)
                 }
@@ -210,203 +200,132 @@ struct MenuBarView: View {
         }
     }
 
+    // MARK: - Extra Usage Section
+
     @ViewBuilder
     private var extraUsageSectionView: some View {
         if let extra = viewModel.extraUsage, let spendLimit = extra.spendLimit {
             extraUsageSection(extra: extra, spendLimit: spendLimit)
-        } else if viewModel.usageSummary != nil && viewModel.extraUsage == nil {
-            // Show placeholder while extra usage is loading (usage data loaded but extra not yet)
-            extraUsagePlaceholder
         }
-        // If usageSummary is nil, we're still loading everything - don't show extra usage area
-    }
-
-    @ViewBuilder
-    private var extraUsagePlaceholder: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Header row - match toggle button height
-            HStack {
-                Text("Extra Usage")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.secondary)
-
-                Spacer()
-
-                // Placeholder for toggle button to match height
-                HStack(spacing: 6) {
-                    ProgressView()
-                        .scaleEffect(0.4)
-                        .frame(width: 8, height: 8)
-                    Text("Loading")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.secondary)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.secondary.opacity(0.1))
-                .cornerRadius(4)
-            }
-
-            // Spending section - match real content heights
-            VStack(alignment: .leading, spacing: 6) {
-                // Amounts row - font size 20 bold ≈ 24px
-                HStack {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.secondary.opacity(0.2))
-                        .frame(width: 70, height: 24)
-
-                    Spacer()
-
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.secondary.opacity(0.2))
-                        .frame(width: 90, height: 16)
-                }
-                .frame(height: 24)
-
-                // Progress bar
-                RoundedRectangle(cornerRadius: 2.5)
-                    .fill(Color(nsColor: .separatorColor))
-                    .frame(height: 6)
-
-                // Balance row - font size 11 is ~14px
-                HStack {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.secondary.opacity(0.2))
-                        .frame(width: 60, height: 14)
-
-                    Spacer()
-
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.secondary.opacity(0.2))
-                        .frame(width: 120, height: 14)
-                }
-            }
-
-            // Manage in browser button (always visible to prevent layout shift)
-            Button {
-                openURL("https://claude.ai/settings/usage")
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "safari")
-                        .font(.system(size: 11))
-                    Text("Manage in Browser")
-                        .font(.system(size: 11))
-                    Spacer()
-                    Image(systemName: "arrow.up.right")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .background(Color.primary.opacity(0.06))
-                .cornerRadius(4)
-            }
-            .buttonStyle(.plain)
-            .foregroundColor(.secondary)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Constants.Colors.cardBackground)
-        .cornerRadius(6)
     }
 
     @ViewBuilder
     private func extraUsageSection(extra: ExtraUsageSummary, spendLimit: OverageSpendLimit) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Header with toggle
-            HStack(alignment: .center) {
-                Text("Extra Usage")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.secondary)
+            // Header with toggle or read-only status
+            HStack(alignment: .firstTextBaseline) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text("Extra Usage")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.secondary)
+                    if spendLimit.isEnabled {
+                        Text("(\(spendLimit.resetDateDisplay))")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary.opacity(0.7))
+                    }
+                }
 
                 Spacer()
 
-                ExtraUsageToggleButton(
-                    isEnabled: spendLimit.isEnabled,
-                    onToggle: viewModel.toggleExtraUsage
-                )
+                if extra.hasDetailedData {
+                    ExtraUsageToggleButton(
+                        isEnabled: spendLimit.isEnabled,
+                        onToggle: viewModel.toggleExtraUsage
+                    )
+                } else {
+                    // Read-only status when detailed API is unavailable
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(spendLimit.isEnabled ? Color.green : Color.secondary.opacity(0.4))
+                            .frame(width: 6, height: 6)
+                        Text(spendLimit.isEnabled ? "Enabled" : "Disabled")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(spendLimit.isEnabled ? .primary : .secondary)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(spendLimit.isEnabled ? Color.green.opacity(0.15) : Color.secondary.opacity(0.1))
+                    )
+                }
             }
 
-            // Spending progress section
-            VStack(alignment: .leading, spacing: 6) {
-                // Amounts row
-                HStack(alignment: .firstTextBaseline) {
-                    HStack(alignment: .firstTextBaseline, spacing: 2) {
-                        Text(spendLimit.formattedUsedCredits)
-                            .font(.system(size: 20, weight: .bold, design: .rounded))
-                            .foregroundColor(spendingColor(percentage: spendLimit.usedPercentage))
+            // Spending progress section (only when there's actual spending data)
+            if spendLimit.monthlyCreditLimit > 0 {
+                VStack(alignment: .leading, spacing: 6) {
+                    // Amounts row
+                    HStack(alignment: .firstTextBaseline) {
+                        HStack(alignment: .firstTextBaseline, spacing: 2) {
+                            Text(spendLimit.formattedUsedCredits)
+                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .foregroundColor(spendingColor(percentage: spendLimit.usedPercentage))
 
-                        Text("spent")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                    }
-
-                    Spacer()
-
-                    HStack(alignment: .firstTextBaseline, spacing: 2) {
-                        Text("\(spendLimit.usedPercentage)%")
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundColor(.secondary)
-
-                        Text("of")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-
-                        Text(spendLimit.formattedMonthlyLimit)
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                // Progress bar
-                GeometryReader { geometry in
-                    let normalizedPercentage = min(max(Double(spendLimit.usedPercentage), 0), 100) / 100.0
-                    ZStack(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 2.5)
-                            .fill(Color(nsColor: .separatorColor))
-
-                        RoundedRectangle(cornerRadius: 2.5)
-                            .fill(spendingColor(percentage: spendLimit.usedPercentage))
-                            .frame(width: geometry.size.width * normalizedPercentage)
-                    }
-                }
-                .frame(height: 6)
-
-                // Balance and info row
-                HStack(alignment: .center, spacing: 0) {
-                    if let balance = extra.formattedBalance {
-                        HStack(spacing: 4) {
-                            Image(systemName: "creditcard")
-                                .font(.system(size: 10))
+                            Text("spent")
+                                .font(.system(size: 11))
                                 .foregroundColor(.secondary)
-                            Text(balance)
-                                .font(.system(size: 11, weight: .medium))
                         }
 
                         Spacer()
+
+                        HStack(alignment: .firstTextBaseline, spacing: 2) {
+                            Text("\(spendLimit.usedPercentage)%")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundColor(.secondary)
+
+                            Text("of")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+
+                            Text(spendLimit.formattedMonthlyLimit)
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundColor(.secondary)
+                        }
                     }
 
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(extra.isAutoReloadOn ? Color.green : Color.secondary.opacity(0.5))
-                            .frame(width: 6, height: 6)
-                        Text(extra.isAutoReloadOn ? "Auto-reload" : "No auto-reload")
-                            .font(.system(size: 11))
-                            .foregroundColor(extra.isAutoReloadOn ? .primary : .secondary)
+                    // Progress bar
+                    GeometryReader { geometry in
+                        let normalizedPercentage = min(max(Double(spendLimit.usedPercentage), 0), 100) / 100.0
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 2.5)
+                                .fill(Color(nsColor: .separatorColor))
+
+                            RoundedRectangle(cornerRadius: 2.5)
+                                .fill(spendingColor(percentage: spendLimit.usedPercentage))
+                                .frame(width: geometry.size.width * normalizedPercentage)
+                        }
                     }
+                    .frame(height: 6)
 
-                    if extra.formattedBalance == nil {
-                        Spacer()
+                    // Balance and info row (only when detailed data available)
+                    if extra.hasDetailedData {
+                        HStack(alignment: .center, spacing: 0) {
+                            if let balance = extra.formattedBalance {
+                                HStack(spacing: 4) {
+                                    Image(systemName: "creditcard")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.secondary)
+                                    Text(balance)
+                                        .font(.system(size: 11, weight: .medium))
+                                }
+
+                                Spacer()
+                            }
+
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(extra.isAutoReloadOn ? Color.green : Color.secondary.opacity(0.5))
+                                    .frame(width: 6, height: 6)
+                                Text(extra.isAutoReloadOn ? "Auto-reload" : "No auto-reload")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(extra.isAutoReloadOn ? .primary : .secondary)
+                            }
+
+                            if extra.formattedBalance == nil {
+                                Spacer()
+                            }
+                        }
                     }
-
-                    Text("·")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal, 6)
-
-                    Text(spendLimit.resetDateDisplay)
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
                 }
             }
 
@@ -481,21 +400,19 @@ struct MenuBarView: View {
             } else if viewModel.usageSummary != nil {
                 if viewModel.isPrimaryAtLimit,
                    let remaining = viewModel.usageSummary?.primaryItem?.resetTimeRemaining {
-                    // Same computed source as menubar/card; add prefix when counting down
                     let text = viewModel.secondsUntilNextRefresh > 0
                         ? "resets in \(remaining)" : remaining
                     Text(text)
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                 } else if viewModel.secondsUntilNextRefresh > 0 {
-                    // Show countdown to next auto-refresh
                     Text(formatCountdown(viewModel.secondsUntilNextRefresh))
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                 } else {
-                    ProgressView()
-                        .scaleEffect(0.45)
-                        .frame(width: 11, height: 11)
+                    Text("–")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
                 }
 
                 Button {
@@ -529,74 +446,13 @@ struct MenuBarView: View {
                 .font(.system(size: 32))
                 .foregroundColor(.secondary)
 
-            Text("Not Logged In")
+            Text("Not Connected")
                 .font(.system(size: 13, weight: .medium))
 
-            Text("Log in to Claude.ai to view usage")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-
-            Button {
-                AppDelegate.shared.openLoginWindow()
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "person.crop.circle.badge.checkmark")
-                        .font(.system(size: 12))
-                    Text("Log In")
-                        .font(.system(size: 13, weight: .medium))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-                .background(Color.accentColor)
-                .foregroundColor(.white)
-                .cornerRadius(6)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.vertical, 12)
-    }
-
-    private var authenticatingView: some View {
-        VStack(spacing: 10) {
-            ProgressView()
-                .scaleEffect(0.8)
-
-            Text("Checking login status...")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-        }
-        .padding(.vertical, 20)
-    }
-
-    private func errorView(message: String) -> some View {
-        VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 32))
-                .foregroundColor(.orange)
-
-            Text("Error")
-                .font(.system(size: 13, weight: .medium))
-
-            Text(message)
+            Text("Install Claude Code to get started")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
-
-            Button {
-                Task { await viewModel.authService.checkStoredCredentials() }
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 10))
-                    Text("Retry")
-                        .font(.system(size: 11, weight: .medium))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-                .background(Constants.Colors.cardBackground)
-                .cornerRadius(6)
-            }
-            .buttonStyle(.plain)
         }
         .padding(.vertical, 12)
     }
@@ -648,19 +504,13 @@ struct MenuBarView: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .frame(width: 70)
-                    .onChange(of: viewModel.settings.resetSoundRaw) { newValue in
+                    .onReceive(viewModel.settings.$resetSoundRaw.dropFirst()) { newValue in
                         ResetSound(rawValue: newValue)?.play()
                     }
                 }
 
-                HStack(spacing: 10) {
-                    FooterButton(title: "Log Out", icon: "rectangle.portrait.and.arrow.right") {
-                        Task { await viewModel.logout() }
-                    }
-
-                    FooterButton(title: "Quit", icon: "xmark.circle") {
-                        viewModel.quit()
-                    }
+                FooterButton(title: "Quit", icon: "xmark.circle") {
+                    viewModel.quit()
                 }
                 .padding(.top, 4)
             } else {
@@ -693,4 +543,3 @@ struct FooterButton: View {
         .buttonStyle(.plain)
     }
 }
-

@@ -9,9 +9,14 @@ private let logger = Logger(subsystem: Constants.App.bundleIdentifier, category:
 protocol UsageRefreshServiceProtocol: AnyObject {
     var usageSummary: UsageSummary? { get }
     var usageSummaryPublisher: Published<UsageSummary?>.Publisher { get }
+    var extraUsage: ExtraUsageSummary? { get }
+    var extraUsagePublisher: Published<ExtraUsageSummary?>.Publisher { get }
     var isRefreshing: Bool { get }
+    var isRefreshingPublisher: Published<Bool>.Publisher { get }
     var lastError: String? { get }
+    var lastErrorPublisher: Published<String?>.Publisher { get }
     var secondsUntilNextRefresh: Int { get }
+    var secondsUntilNextRefreshPublisher: Published<Int>.Publisher { get }
 
     func startAutoRefresh()
     func stopAutoRefresh()
@@ -25,15 +30,23 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
     var usageSummaryPublisher: Published<UsageSummary?>.Publisher { $usageSummary }
 
     @Published private(set) var extraUsage: ExtraUsageSummary?
+    var extraUsagePublisher: Published<ExtraUsageSummary?>.Publisher { $extraUsage }
+
     @Published private(set) var isRefreshing = false
+    var isRefreshingPublisher: Published<Bool>.Publisher { $isRefreshing }
+
     @Published private(set) var lastError: String?
+    var lastErrorPublisher: Published<String?>.Publisher { $lastError }
+
     @Published private(set) var secondsUntilNextRefresh: Int = 0
+    var secondsUntilNextRefreshPublisher: Published<Int>.Publisher { $secondsUntilNextRefresh }
 
     private let apiClient: ClaudeAPIClientProtocol
     private let authService: AuthenticationServiceProtocol
     private let settings: UserSettings
     private var refreshTimer: Timer?
     private var countdownTimer: Timer?
+    private var countdownTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
 
     /// Target date for `secondsUntilNextRefresh` countdown.
@@ -89,6 +102,7 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
 
     deinit {
         currentRefreshTask?.cancel()
+        countdownTask?.cancel()
         refreshTimer?.invalidate()
         countdownTimer?.invalidate()
         resumeRefreshTimer?.invalidate()
@@ -145,14 +159,9 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
             forName: NSWorkspace.willSleepNotification,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            guard let self = self else { return }
-
-            // Stop all timers before sleep to prevent Power Nap from triggering
-            // API requests or reset sounds. The Task executes on the main actor
-            // before the system completes the sleep transition. The wake handler
-            // also defensively cleans up resumeRefreshTimer as a safety net.
-            Task { @MainActor in
+        ) { _ in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
                 logger.info("System going to sleep, stopping all timers")
                 self.stopAllTimers()
             }
@@ -162,10 +171,9 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
             forName: NSWorkspace.didWakeNotification,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            guard let self = self else { return }
-
-            Task { @MainActor in
+        ) { _ in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
                 guard self.authService.authState.isAuthenticated else { return }
 
                 logger.info("System woke from sleep, refreshing usage")
@@ -199,8 +207,8 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
         let interval = resetsAt.timeIntervalSince(Date())
         guard interval > 0 else {
             logger.info("Reset time has passed, refreshing now")
-            Task { @MainActor in
-                await self.refreshNow()
+            Task { @MainActor [weak self] in
+                await self?.refreshNow()
             }
             return
         }
@@ -250,6 +258,8 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
         refreshTimer = nil
         countdownTimer?.invalidate()
         countdownTimer = nil
+        countdownTask?.cancel()
+        countdownTask = nil
         nextRefreshDate = nil
         secondsUntilNextRefresh = 0
     }
@@ -261,30 +271,30 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
     }
 
     /// Starts a 60-second countdown timer targeting the reset time, aligned to system clock
-    /// minute boundaries. This keeps the UI updated (menubar + popover) while auto-refresh is paused.
+    /// minute boundaries.
     private func startResetCountdown(resetsAt: Date?) {
         guard let resetsAt = resetsAt else { return }
 
         countdownTimer?.invalidate()
+        countdownTimer = nil
+        countdownTask?.cancel()
 
         nextRefreshDate = resetsAt
         updateCountdown()
 
-        // Align first tick to next minute boundary (e.g., 14:23:45 → fires at 14:24:00)
+        // Align first tick to next minute boundary, then switch to 60s repeating timer
         let secondsIntoMinute = Calendar.current.component(.second, from: Date())
-        let delayToNextMinute = TimeInterval(60 - secondsIntoMinute)
+        let delayToNextMinute = secondsIntoMinute == 0 ? 0.0 : TimeInterval(60 - secondsIntoMinute)
 
-        countdownTimer = Timer.scheduledTimer(withTimeInterval: delayToNextMinute, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self = self, self.nextRefreshDate != nil else { return }
-                self.updateCountdown()
+        countdownTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delayToNextMinute * 1_000_000_000))
+            guard !Task.isCancelled, let self = self, self.nextRefreshDate != nil else { return }
+            self.updateCountdown()
 
-                // Continue with repeating 60s timer aligned to clock
-                self.countdownTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
-                    Task { @MainActor [weak self] in
-                        guard let self = self, self.nextRefreshDate != nil else { return }
-                        self.updateCountdown()
-                    }
+            self.countdownTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self = self, self.nextRefreshDate != nil else { return }
+                    self.updateCountdown()
                 }
             }
         }
@@ -298,7 +308,6 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
         let remaining = Int(nextRefresh.timeIntervalSince(Date()))
         secondsUntilNextRefresh = max(0, remaining)
 
-        // Check if any usage item's reset time has just expired
         checkForExpiredResetTimes()
     }
 
@@ -311,14 +320,13 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
         for item in items {
             guard let resetsAt = item.resetsAt else { continue }
 
-            // If resetsAt has expired and hasn't been processed yet
             if resetsAt <= now && !processedResetTimes.contains(resetsAt) {
                 processedResetTimes.insert(resetsAt)
                 logger.info("Usage item '\(item.key)' reset time expired, forcing refresh")
-                Task { @MainActor in
-                    await self.refreshNow()
+                Task { @MainActor [weak self] in
+                    await self?.refreshNow()
                 }
-                return // Only trigger one refresh at a time
+                return
             }
         }
     }
@@ -332,20 +340,18 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
         isRefreshing = true
         defer { isRefreshing = false }
 
-        // Capture timer state before refresh to avoid race condition
         let hasActiveTimer = refreshTimer != nil
         let refreshInterval = settings.refreshInterval.seconds
 
         await performRefresh()
 
-        // Only update next refresh date if timer was active before refresh
         if hasActiveTimer && refreshTimer != nil {
             nextRefreshDate = Date().addingTimeInterval(refreshInterval)
         }
     }
 
     private func performRefresh() async {
-        guard let organizationId = authService.authState.organizationId else {
+        guard authService.authState.isAuthenticated else {
             lastError = "Not authenticated"
             return
         }
@@ -359,7 +365,8 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
         lastError = nil
 
         do {
-            let usageResponse = try await apiClient.fetchUsage(organizationId: organizationId)
+            let usageResponse = try await apiClient.fetchUsage()
+
             let summary = processUsageResponse(usageResponse)
 
             checkForResetAndPlaySound(utilization: summary.primaryItem?.utilization)
@@ -376,7 +383,9 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
                 startResetCountdown(resetsAt: summary.primaryResetsAt)
             }
 
-            await fetchExtraUsageData(organizationId: organizationId)
+            // Fetch detailed extra usage data from separate endpoints,
+            // falling back to inline data from usage response
+            await fetchExtraUsageData(inlineExtraUsage: usageResponse.extraUsage)
 
             let primaryUtil = summary.primaryItem?.utilization ?? 0
             logger.info("Usage updated: \(summary.items.count) items, primary=\(primaryUtil)%")
@@ -387,25 +396,22 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
             if error.isAuthError {
                 retryCount = 0
             } else {
-                await handleRetry(organizationId: organizationId)
+                await handleRetry()
             }
         } catch {
             lastError = error.localizedDescription
             logger.error("Error: \(error.localizedDescription)")
-            await handleRetry(organizationId: organizationId)
+            await handleRetry()
         }
     }
 
-    private func handleRetry(organizationId: String) async {
+    private func handleRetry() async {
         guard retryCount < maxRetries else {
             logger.warning("Max retries reached, waiting for next scheduled refresh")
-            // Don't reset retryCount here - let it reset on successful refresh
-            // This prevents rapid retry loops when network is consistently failing
             return
         }
 
         retryCount += 1
-        // Exponential backoff: 30s, 60s, 120s
         let delay = Constants.Refresh.retryDelaySeconds * pow(2.0, Double(retryCount - 1))
         logger.info("Retrying in \(Int(delay))s (attempt \(self.retryCount)/\(self.maxRetries))")
 
@@ -474,16 +480,32 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
 
     // MARK: - Extra Usage
 
-    private func fetchExtraUsageData(organizationId: String) async {
+    private func fetchExtraUsageData(inlineExtraUsage: OAuthExtraUsage?) async {
+        // Try detailed endpoints first
         do {
-            async let creditsTask = apiClient.fetchPrepaidCredits(organizationId: organizationId)
-            async let spendLimitTask = apiClient.fetchOverageSpendLimit(organizationId: organizationId)
+            async let creditsTask = apiClient.fetchPrepaidCredits()
+            async let spendLimitTask = apiClient.fetchOverageSpendLimit()
 
             let (credits, spendLimit) = try await (creditsTask, spendLimitTask)
             self.extraUsage = ExtraUsageSummary(credits: credits, spendLimit: spendLimit)
+            return
         } catch {
-            logger.debug("Extra usage fetch failed: \(error.localizedDescription)")
+            logger.debug("Detailed extra usage fetch failed: \(error.localizedDescription)")
         }
+
+        // Fall back to inline extra_usage from OAuth usage response
+        guard let inline = inlineExtraUsage else { return }
+        let fallbackSpendLimit = OverageSpendLimit(
+            organizationUuid: "",
+            isEnabled: inline.isEnabled,
+            monthlyCreditLimit: inline.monthlyLimit ?? 0,
+            currency: "usd",
+            usedCredits: inline.usedCredits ?? 0,
+            outOfCredits: inline.utilization.map { $0 >= 100 } ?? false,
+            createdAt: "",
+            updatedAt: ""
+        )
+        self.extraUsage = ExtraUsageSummary(credits: nil, spendLimit: fallbackSpendLimit)
     }
 
     // MARK: - Data Processing

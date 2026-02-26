@@ -21,27 +21,46 @@ A macOS menubar app that displays your Claude.ai usage statistics.
 
 ## Features
 
+- Auto-connects via Claude Code CLI (zero-interaction login)
 - 5-hour and 7-day usage display in menubar
 - Color-coded status indicator (green/yellow/red)
-- Configurable auto-refresh (1-10 min)
-- Extra Usage toggle
-- Reset sound notification
-- Secure Keychain storage
+- Configurable auto-refresh (1, 3, 5, 10 min)
+- Extra Usage section with spending progress and monthly limit
+- Reset sound notification when quota recovers
 
 ## How It Works
 
-1. **Login** — Opens WebView to `claude.ai/login`, extracts session cookies after you log in
-2. **Storage** — Cookies saved in macOS Keychain (encrypted, device-only)
-3. **API** — Calls `claude.ai/api/bootstrap` and `/api/organizations/{id}/usage` to fetch your usage data
-4. **Refresh** — Polls every 1-10 minutes (configurable), caches results locally
+1. Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and logged in
+2. App auto-detects Claude Code's OAuth credentials from macOS Keychain
+3. Fetches usage via `api.anthropic.com` — no login required
 
 > Only reads your own usage data. No conversations or personal info accessed.
+
+## Recent Changes
+
+### OAuth Migration
+
+Migrated from cookie-based authentication (`claude.ai` WebView login) to OAuth via Claude Code CLI:
+
+- **Zero-interaction login** — reads OAuth credentials directly from Claude Code's Keychain entry
+- **Token refresh** — automatic token refresh via `POST /v1/oauth/token`
+- **Removed** — WebView login flow, cookie storage, Keychain write access, Disconnect button
+
+### Extra Usage
+
+- Spending progress display with amount, percentage, and progress bar
+- Read-only enabled/disabled status indicator
+- Monthly reset date shown in section header
+- Graceful fallback when detailed API endpoints are unavailable
+- Clean disabled state (hides spending data and reset time when extra usage is off)
+- "Manage in Browser" link to claude.ai settings
 
 ## Build & Run
 
 ```bash
-git clone https://github.com/nicekate/claude-usage.git
+git clone git@github.com:P233/claude-usage.app.git
 cd claude-usage
+git checkout oauth
 chmod +x build.sh
 ./build.sh
 ```
@@ -52,9 +71,10 @@ chmod +x build.sh
 
 | Issue                        | Solution                                           |
 | ---------------------------- | -------------------------------------------------- |
+| Not detecting Claude Code    | Make sure Claude Code is installed and logged in (`claude auth status`) |
 | Keychain prompt every launch | Click "Always Allow"                               |
 | App blocked by Gatekeeper    | System Settings → Privacy & Security → Open Anyway |
-| Session expired              | Log Out → Log In again                             |
+| Session expired              | Restart Claude Code to refresh credentials          |
 
 ## License
 
