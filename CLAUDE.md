@@ -14,7 +14,7 @@ A macOS menubar application that displays Claude.ai usage statistics in real-tim
 - Read-only: never writes to Claude Code's Keychain entry
 - Token refresh via `POST https://api.anthropic.com/v1/oauth/token` (transparent to user)
 - Refreshed tokens cached in-memory only (re-read from Keychain on next launch)
-- Session expiry (401/403): Clear cached auth, show "Not Connected" UI
+- Session expiry (401/403): Clear cached auth, show "No Credentials Found" UI with Retry button
 
 ### 2. Usage Data Fetching
 
@@ -44,7 +44,7 @@ A macOS menubar application that displays Claude.ai usage statistics in real-tim
 
 ### 6. Settings
 
-- Auto Refresh Interval, Reset Sound selector, Disconnect, Quit
+- Auto Refresh Interval, Reset Sound selector, Quit
 
 ## Architecture
 
@@ -81,18 +81,18 @@ AppViewModel (coordinates all above, exposes @Published properties)
            ▼                               ▼
     ┌─────────────┐                ┌────────────────┐
     │authenticated│                │notAuthenticated│
-    │   (tier)    │                │                │
-    └──────┬──────┘                └────────────────┘
-           │   logout()                    ▲
-           └───────────────────────────────┘
+    │   (tier)    │                │  (Retry btn)   │
+    └──────┬──────┘                └───────┬────────┘
+           │  handleSessionExpired()       │ reconnect()
+           └──────────▶ ◀─────────────────┘
 ```
 
 ### Edge Cases & Error Handling
 
 - **Network Disconnected**: Skip API call, set `lastError`, retry on next timer tick
-- **Session Expired (401/403)**: Set `authState = .notAuthenticated`, show "Not Connected"
+- **Session Expired (401/403)**: Set `authState = .notAuthenticated`, show "No Credentials Found" with Retry
 - **API Errors**: Max 3 retries with exponential backoff (30s, 60s, 120s)
-- **Cache**: `cachedUsageSummary_v2` in UserDefaults, max age 1 hour, cleared on logout
+- **Cache**: `cachedUsageSummary_v2` in UserDefaults, max age 1 hour, cleared on auth state change
 - **System Sleep/Wake**: Stop all timers on sleep (prevents Power Nap API calls/sounds); refresh + restart on wake
 
 **Primary Usage at Limit (100%)**:

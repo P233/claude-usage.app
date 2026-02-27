@@ -446,13 +446,29 @@ struct MenuBarView: View {
                 .font(.system(size: 32))
                 .foregroundColor(.secondary)
 
-            Text("Not Connected")
+            Text("No Credentials Found")
                 .font(.system(size: 13, weight: .medium))
 
-            Text("Install Claude Code to get started")
+            Text("Claude Code CLI may not be logged in.\nRun `claude` to authenticate.")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
+
+            Button {
+                Task { await viewModel.reconnect() }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10))
+                    Text("Retry")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Constants.Colors.cardBackground)
+                .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
         }
         .padding(.vertical, 12)
     }

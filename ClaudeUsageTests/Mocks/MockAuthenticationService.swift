@@ -29,8 +29,4 @@ final class MockAuthenticationService: ObservableObject, AuthenticationServicePr
     func handleSessionExpired() {
         authState = .notAuthenticated
     }
-
-    func logout() async {
-        authState = .notAuthenticated
-    }
 }

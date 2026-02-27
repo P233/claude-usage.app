@@ -106,9 +106,9 @@ final class AppViewModel: ObservableObject {
 
     // MARK: - Actions
 
-    func logout() async {
-        logger.info("User logging out")
-        await authService.logout()
+    func reconnect() async {
+        logger.info("Retrying credential check")
+        await authService.checkStoredCredentials()
     }
 
     func refreshUsage() async {

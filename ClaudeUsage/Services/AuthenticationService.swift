@@ -13,7 +13,6 @@ protocol AuthenticationServiceProtocol: AnyObject {
     func checkStoredCredentials() async
     func getAccessToken() async throws -> String
     func handleSessionExpired()
-    func logout() async
 }
 
 // MARK: - Implementation
@@ -124,13 +123,6 @@ final class AuthenticationService: ObservableObject, AuthenticationServiceProtoc
     }
 
     // MARK: - Session Management
-
-    func logout() async {
-        logger.info("Logging out")
-        cachedOAuthTokens = nil
-        cachedRefreshToken = nil
-        authState = .notAuthenticated
-    }
 
     /// Called when API returns 401/403 — session expired
     func handleSessionExpired() {

@@ -448,8 +448,8 @@ final class UsageRefreshServiceTests {
         assertEqual(sut.usageSummary?.primaryItem?.utilization, 0, "Utilization should update to 0")
     }
 
-    func testAuthStateChange_ClearsDataOnLogout() async {
-        TestRunner.shared.startTest("Auth state change clears data on logout")
+    func testAuthStateChange_ClearsDataOnDisconnect() async {
+        TestRunner.shared.startTest("Auth state change clears data on disconnect")
 
         sut = createService()
         await waitForRefresh()
@@ -459,7 +459,7 @@ final class UsageRefreshServiceTests {
         mockAuthService.setAuthState(.notAuthenticated)
         await waitForRefresh()
 
-        assertNil(sut.usageSummary, "Should clear data on logout")
+        assertNil(sut.usageSummary, "Should clear data on disconnect")
     }
 
     func testRefresh_SetsErrorOnAPIFailure() async {
@@ -563,7 +563,7 @@ final class UsageRefreshServiceTests {
         tearDown()
 
         await setUp()
-        await testAuthStateChange_ClearsDataOnLogout()
+        await testAuthStateChange_ClearsDataOnDisconnect()
         tearDown()
 
         await setUp()
