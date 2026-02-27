@@ -33,6 +33,9 @@ final class AuthenticationService: ObservableObject, AuthenticationServiceProtoc
     private var cachedOAuthTokens: OAuthTokens?
     private var cachedRefreshToken: String?
 
+    /// Coalesces concurrent token refresh requests to avoid duplicate network calls.
+    private var activeRefreshTask: Task<String, Error>?
+
     init(
         oauthTokenService: OAuthTokenServiceProtocol = OAuthTokenService()
     ) {
@@ -89,6 +92,7 @@ final class AuthenticationService: ObservableObject, AuthenticationServiceProtoc
     // MARK: - OAuth Access Token
 
     /// Returns a valid access token, refreshing if needed.
+    /// Concurrent callers are coalesced into a single refresh request.
     func getAccessToken() async throws -> String {
         guard let tokens = cachedOAuthTokens else {
             throw ClaudeAPIClient.APIError.notAuthenticated
@@ -98,28 +102,40 @@ final class AuthenticationService: ObservableObject, AuthenticationServiceProtoc
             return tokens.accessToken
         }
 
-        // Token expired — try refresh
+        // Coalesce concurrent refresh requests
+        if let existing = activeRefreshTask {
+            return try await existing.value
+        }
+
         guard let refreshToken = cachedRefreshToken else {
             throw ClaudeAPIClient.APIError.sessionExpired
         }
 
-        let refreshed = try await oauthTokenService.refreshAccessToken(refreshToken: refreshToken)
-        let expiresIn = refreshed.expiresIn ?? {
-            logger.warning("OAuth: server omitted expiresIn, defaulting to 3600s")
-            return 3600
-        }()
+        let task = Task<String, Error> { [weak self] in
+            guard let self else { throw ClaudeAPIClient.APIError.sessionExpired }
 
-        cachedOAuthTokens = OAuthTokens(
-            accessToken: refreshed.accessToken,
-            refreshToken: refreshToken,
-            expiresAt: Int64((Date().timeIntervalSince1970 + Double(expiresIn)) * 1000),
-            scopes: tokens.scopes,
-            subscriptionType: tokens.subscriptionType,
-            rateLimitTier: tokens.rateLimitTier
-        )
+            let refreshed = try await self.oauthTokenService.refreshAccessToken(refreshToken: refreshToken)
+            let expiresIn = refreshed.expiresIn ?? {
+                logger.warning("OAuth: server omitted expiresIn, defaulting to 3600s")
+                return 3600
+            }()
 
-        logger.info("OAuth: access token refreshed on demand")
-        return refreshed.accessToken
+            self.cachedOAuthTokens = OAuthTokens(
+                accessToken: refreshed.accessToken,
+                refreshToken: refreshToken,
+                expiresAt: Int64((Date().timeIntervalSince1970 + Double(expiresIn)) * 1000),
+                scopes: tokens.scopes,
+                subscriptionType: tokens.subscriptionType,
+                rateLimitTier: tokens.rateLimitTier
+            )
+
+            logger.info("OAuth: access token refreshed on demand")
+            return refreshed.accessToken
+        }
+
+        activeRefreshTask = task
+        defer { activeRefreshTask = nil }
+        return try await task.value
     }
 
     // MARK: - Session Management

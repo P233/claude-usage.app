@@ -371,9 +371,13 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
 
             checkForResetAndPlaySound(utilization: summary.primaryItem?.utilization)
 
+            let previousResetsAt = self.usageSummary?.primaryResetsAt
             self.usageSummary = summary
             self.retryCount = 0
-            self.processedResetTimes.removeAll()
+            // Only clear dedup set when reset times actually change
+            if summary.primaryResetsAt != previousResetsAt {
+                self.processedResetTimes.removeAll()
+            }
             saveCache(summary)
 
             if summary.isPrimaryAtLimit {
