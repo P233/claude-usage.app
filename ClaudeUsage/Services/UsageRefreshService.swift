@@ -126,7 +126,6 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
 
                 if state.isAuthenticated {
                     self.currentRefreshTask = Task { [weak self] in
-                        guard !Task.isCancelled else { return }
                         await self?.refreshNow()
                     }
                     self.startAutoRefresh()
@@ -209,6 +208,7 @@ final class UsageRefreshService: ObservableObject, UsageRefreshServiceProtocol {
             logger.info("Reset time has passed, refreshing now")
             Task { @MainActor [weak self] in
                 await self?.refreshNow()
+                self?.startAutoRefresh()
             }
             return
         }

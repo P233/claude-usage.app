@@ -432,6 +432,40 @@ final class UsageRefreshServiceTests {
                    "Should be normal auto-refresh countdown (1-\(maxExpected)s), got \(countdown)")
     }
 
+    func testScheduleResumeRefresh_PastResetTimeResumesAutoRefresh() async {
+        TestRunner.shared.startTest("Past reset time triggers immediate refresh and resumes auto-refresh")
+
+        // Simulate app launching with cached at-limit data whose reset time has already passed.
+        // Before the fix: scheduleResumeRefresh(interval <= 0) called refreshNow() but not
+        // startAutoRefresh(), leaving no auto-refresh timer after the immediate refresh completed.
+        let nearFutureReset = Date().addingTimeInterval(0.2) // 200ms from now
+        mockAPIClient.fetchUsageResult = .success(makeUsageResponse(
+            fiveHourUtil: 100,
+            resetsAt: nearFutureReset
+        ))
+
+        sut = createService()
+        await waitForRefresh()  // Initial refresh: at-limit, resumeRefreshTimer set for ~5.2s
+
+        // Wait for the reset time to pass
+        try? await Task.sleep(nanoseconds: 400_000_000)  // 400ms
+
+        // Now usageSummary.isPrimaryAtLimit == true but primaryResetsAt is in the past.
+        // Return non-limit data on the next fetch.
+        mockAPIClient.fetchUsageResult = .success(makeUsageResponse(fiveHourUtil: 30))
+
+        // startAutoRefresh() sees at-limit with past resetsAt →
+        // scheduleResumeRefresh(interval <= 0) → Task { refreshNow(); startAutoRefresh() }
+        sut.startAutoRefresh()
+        await waitForRefresh()
+        await waitForRefresh()  // Extra buffer for the immediate refresh + startAutoRefresh to settle
+
+        let countdown = sut.secondsUntilNextRefresh
+        let maxExpected = Int(settings.refreshInterval.seconds)
+        assertTrue(countdown > 0 && countdown <= maxExpected,
+                   "Should resume normal auto-refresh countdown after past reset, got \(countdown)")
+    }
+
     func testResetDetection_UtilizationUpdates() async {
         TestRunner.shared.startTest("Reset detection updates utilization")
 
@@ -556,6 +590,10 @@ final class UsageRefreshServiceTests {
 
         await setUp()
         await testResetCountdown_RecoveryFromLimitResumesAutoRefresh()
+        tearDown()
+
+        await setUp()
+        await testScheduleResumeRefresh_PastResetTimeResumesAutoRefresh()
         tearDown()
 
         await setUp()
