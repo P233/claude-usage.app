@@ -37,6 +37,7 @@ Pods/
 
 # IDE
 .idea/
+.vscode/
 *.swp
 *.swo
 *~
