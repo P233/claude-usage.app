@@ -86,14 +86,16 @@ final class OAuthTokenService: OAuthTokenServiceProtocol {
     func refreshAccessToken(refreshToken: String) async throws -> OAuthTokenRefreshResponse {
         var request = URLRequest(url: Constants.OAuth.tokenEndpoint)
         request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue(Constants.OAuth.userAgent, forHTTPHeaderField: "User-Agent")
 
-        let body: [String: String] = [
-            "grant_type": "refresh_token",
-            "refresh_token": refreshToken,
-            "client_id": Constants.OAuth.clientId
+        var components = URLComponents()
+        components.queryItems = [
+            URLQueryItem(name: "grant_type", value: "refresh_token"),
+            URLQueryItem(name: "refresh_token", value: refreshToken),
+            URLQueryItem(name: "client_id", value: Constants.OAuth.clientId)
         ]
-        request.httpBody = try JSONEncoder().encode(body)
+        request.httpBody = components.query?.data(using: .utf8)
 
         do {
             let (data, response) = try await session.data(for: request)
