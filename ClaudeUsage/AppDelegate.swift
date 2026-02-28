@@ -16,7 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var statusBarHostingView: NSHostingView<StatusBarContentView>?
 
     /// Shared view model accessible throughout the app
-    @Published var viewModel = AppViewModel()
+    let viewModel = AppViewModel()
 
     override init() {
         super.init()
@@ -85,7 +85,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private func updateStatusBarContent() {
         guard let button = statusItem?.button else { return }
 
-        let contentView = StatusBarContentView(viewModel: viewModel)
+        let contentView = StatusBarContentView(
+            authState: viewModel.authState,
+            primaryItem: viewModel.usageSummary?.primaryItem,
+            statusColor: viewModel.statusColor,
+            isRefreshing: viewModel.isRefreshing
+        )
 
         if let hostingView = statusBarHostingView {
             hostingView.rootView = contentView
@@ -133,7 +138,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
 /// SwiftUI view for the menubar status item (supports two lines)
 struct StatusBarContentView: View {
-    @ObservedObject var viewModel: AppViewModel
+    let authState: AuthState
+    let primaryItem: UsageItem?
+    let statusColor: Color
+    let isRefreshing: Bool
 
     /// Default remaining time when resetting (5-hour cycle)
     private static let defaultRemaining = "5h"
@@ -143,8 +151,8 @@ struct StatusBarContentView: View {
             Image(systemName: "brain")
                 .font(.system(size: 13))
 
-            if viewModel.authState.isAuthenticated {
-                if let summary = viewModel.usageSummary, let primary = summary.primaryItem {
+            if authState.isAuthenticated {
+                if let primary = primaryItem {
                     VStack(alignment: .leading, spacing: -3) {
                         HStack(alignment: .center, spacing: 3) {
                             Text("\(primary.utilization)%")
@@ -152,7 +160,7 @@ struct StatusBarContentView: View {
                                 .fixedSize()
 
                             Circle()
-                                .fill(viewModel.statusColor)
+                                .fill(statusColor)
                                 .frame(width: 6, height: 6)
                         }
 
@@ -161,7 +169,7 @@ struct StatusBarContentView: View {
                             .opacity(0.8)
                             .fixedSize()
                     }
-                } else if viewModel.isRefreshing {
+                } else if isRefreshing {
                     ProgressView()
                         .scaleEffect(0.4)
                         .frame(width: 10, height: 10)
